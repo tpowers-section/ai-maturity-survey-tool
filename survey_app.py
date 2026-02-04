@@ -162,7 +162,36 @@ def process_multiselect_column(series, get_counts=True):
             continue
         # Split by semicolon or comma
         options = [opt.strip() for opt in str(value).replace(';', ',').split(',') if opt.strip()]
-        all_options.extend(options)
+        
+        # Normalize each individual option
+        normalized_options = []
+        for opt in options:
+            # Apply the same normalization as normalize_for_display
+            normalized = opt.strip()
+            
+            # Replace apostrophe/quote variations
+            apostrophe_chars = ["'", "'", "'", "`", "´", "'"]
+            for char in apostrophe_chars:
+                normalized = normalized.replace(char, "'")
+            
+            quote_chars = [""", """, "«", "»", "„", "‟"]
+            for char in quote_chars:
+                normalized = normalized.replace(char, '"')
+            
+            # Remove invisible characters
+            invisible_chars = ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']
+            for char in invisible_chars:
+                normalized = normalized.replace(char, '')
+            
+            # Normalize whitespace
+            normalized = ' '.join(normalized.split())
+            
+            # Capitalize
+            normalized = normalized.capitalize()
+            
+            normalized_options.append(normalized)
+        
+        all_options.extend(normalized_options)
     
     if get_counts:
         option_counts = pd.Series(all_options).value_counts()

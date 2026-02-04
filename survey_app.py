@@ -514,17 +514,26 @@ def filter_valid_responses(series, question_text):
         # No whitelist for this question, return as-is
         return series
     
-    # Create a set for faster lookup with normalized text
+    # Create a more aggressive normalization function
     def normalize_text(text):
-        """Normalize text for comparison - handle apostrophes, quotes, extra spaces"""
+        """Normalize text for comparison - handle all variations"""
         text = str(text).strip()
-        # Replace curly apostrophes with straight ones
-        text = text.replace("'", "'").replace("'", "'")
-        # Replace curly quotes with straight ones  
-        text = text.replace(""", '"').replace(""", '"')
-        # Normalize multiple spaces to single space
+        
+        # Replace ALL types of apostrophes and quotes with standard ones
+        text = text.replace("'", "'").replace("'", "'").replace("`", "'")
+        text = text.replace(""", '"').replace(""", '"').replace("«", '"').replace("»", '"')
+        
+        # Remove zero-width characters and other invisible unicode
+        text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '')
+        text = text.replace('\ufeff', '')  # BOM
+        
+        # Normalize whitespace - replace all whitespace with single space
         text = ' '.join(text.split())
-        return text.lower()
+        
+        # Convert to lowercase
+        text = text.lower()
+        
+        return text
     
     valid_set = {normalize_text(opt) for opt in valid_options}
     

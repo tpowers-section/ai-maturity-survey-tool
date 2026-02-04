@@ -38,6 +38,8 @@ if 'loaded_files' not in st.session_state:
     st.session_state.loaded_files = {}
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
+if 'unmapped_clients' not in st.session_state:
+    st.session_state.unmapped_clients = []
 
 def clean_excel_data(df, client_name):
     """Clean and process uploaded Excel data"""
@@ -54,6 +56,43 @@ def clean_excel_data(df, client_name):
     
     return df
 
+def load_client_industry_mapping(data_folder='data'):
+    """Load client to industry mapping from Excel file"""
+    mapping_file = Path(data_folder) / 'client_industry_mapping.xlsx'
+    
+    if not mapping_file.exists():
+        return None, "Mapping file not found. Please create 'client_industry_mapping.xlsx' in the data folder."
+    
+    try:
+        mapping_df = pd.read_excel(mapping_file)
+        
+        # Check if required columns exist
+        if 'Client' not in mapping_df.columns or 'Industry' not in mapping_df.columns:
+            return None, "Mapping file must have 'Client' and 'Industry' columns."
+        
+        # Create dictionary mapping
+        mapping = dict(zip(mapping_df['Client'], mapping_df['Industry']))
+        return mapping, None
+    except Exception as e:
+        return None, f"Error loading mapping file: {str(e)}"
+
+def add_industry_column(df, mapping):
+    """Add industry column to dataframe based on client mapping"""
+    if mapping is None:
+        df['Industry'] = 'Unknown'
+        return df
+    
+    # Map industries
+    df['Industry'] = df['Client'].map(mapping)
+    
+    # Track unmapped clients
+    unmapped = df[df['Industry'].isna()]['Client'].unique().tolist()
+    
+    # Fill unmapped with 'Unknown'
+    df['Industry'] = df['Industry'].fillna('Unknown')
+    
+    return df, unmapped
+
 def load_data_from_folder(data_folder='data'):
     """Load all Excel files from the data folder"""
     data_path = Path(data_folder)
@@ -62,6 +101,9 @@ def load_data_from_folder(data_folder='data'):
         return None, f"Data folder '{data_folder}' not found. Please create it and add your Excel files."
     
     excel_files = list(data_path.glob('*.xlsx')) + list(data_path.glob('*.xls'))
+    
+    # Exclude the mapping file
+    excel_files = [f for f in excel_files if 'client_industry_mapping' not in f.name.lower()]
     
     if not excel_files:
         return None, f"No Excel files found in '{data_folder}' folder."
@@ -153,7 +195,7 @@ def get_demographic_columns(df):
 def get_question_columns(df):
     """Get columns that represent survey questions"""
     # Exclude system columns
-    exclude_cols = ['Client', 'Participant ID', 'Participant Identifier', 'Email Address:', 'Email Address']
+    exclude_cols = ['Client', 'Participant ID', 'Participant Identifier', 'Email Address:', 'Email Address', 'Industry']
     
     # Get demographic columns to exclude
     demo_cols = get_demographic_columns(df)
@@ -175,17 +217,36 @@ with st.sidebar:
     # Load data on first run or when refresh button is clicked
     if not st.session_state.data_loaded or st.button("🔄 Refresh Data", help="Reload data from the data folder"):
         with st.spinner("Loading survey data..."):
+            # Load industry mapping
+            industry_mapping, mapping_error = load_client_industry_mapping('data')
+            
+            if mapping_error:
+                st.warning(f"⚠️ {mapping_error}")
+                st.info("Create a file called 'client_industry_mapping.xlsx' with columns 'Client' and 'Industry'")
+            
+            # Load survey data
             result = load_data_from_folder('data')
             
             if result[0] is not None:
-                st.session_state.combined_data = result[0]
+                combined_df = result[0]
+                
+                # Add industry column
+                combined_df, unmapped = add_industry_column(combined_df, industry_mapping)
+                
+                st.session_state.combined_data = combined_df
                 st.session_state.loaded_files = result[1]
+                st.session_state.unmapped_clients = unmapped
                 st.session_state.data_loaded = True
                 
                 # Show errors if any
                 if len(result) > 2 and result[2]:
                     for error in result[2]:
                         st.warning(error)
+                
+                # Show unmapped clients
+                if unmapped:
+                    st.warning(f"⚠️ Unmapped clients: {', '.join(unmapped)}")
+                    st.info("Add these clients to 'client_industry_mapping.xlsx'")
                 
                 st.success("✓ Data loaded successfully!")
             else:
@@ -202,6 +263,13 @@ with st.sidebar:
         with st.expander("📄 Loaded Files", expanded=False):
             for file_name, row_count in st.session_state.loaded_files.items():
                 st.text(f"• {file_name}: {row_count} responses")
+        
+        # Show unmapped clients if any
+        if st.session_state.unmapped_clients:
+            with st.expander("⚠️ Unmapped Clients", expanded=False):
+                for client in st.session_state.unmapped_clients:
+                    st.text(f"• {client}")
+                st.caption("Add these to client_industry_mapping.xlsx")
         
         st.divider()
         st.caption("💡 To add new surveys: Add Excel files to the 'data' folder and click 'Refresh Data'")
@@ -240,47 +308,25 @@ if st.session_state.combined_data is not None:
                 default=['All Clients']
             )
         
-       # Demographic filters - only show industry for now
-st.subheader("Demographic Filters")
-
-# Find the industry column
-industry_col = None
-for col in demo_cols:
-    if 'industry' in col.lower():
-        industry_col = col
-        break
-
-active_filters = {}
-if industry_col:
-    # Clean up the label
-    label = industry_col.replace('What ', '').replace('?', '').strip()
-    
-    unique_values = df[industry_col].dropna().unique()
-    if len(unique_values) > 0:
-        selected_values = st.multiselect(
-            label,
-            options=['All'] + sorted([str(v) for v in unique_values]),
-            default=['All'],
-            key=f"filter_{industry_col}"
-        )
-        if 'All' not in selected_values:
-            active_filters[industry_col] = selected_values
-else:
-    st.warning("No industry column found in the data")
+        # Industry filter
+        st.subheader("Filter by Industry")
         
         active_filters = {}
-        for idx, demo_col in enumerate(demo_cols[:4]):  # Show first 4 demographic filters
-            with filter_cols[idx % 4]:
-                unique_values = df[demo_col].dropna().unique()
-                if len(unique_values) > 0:
-                    selected_values = st.multiselect(
-                        demo_col.replace('What ', '').replace('?', '')[:30] + "...",
-                        options=['All'] + sorted([str(v) for v in unique_values]),
-                        default=['All'],
-                        key=f"filter_{demo_col}"
-                    )
-                    if 'All' not in selected_values:
-                        active_filters[demo_col] = selected_values
+        if 'Industry' in df.columns:
+            unique_industries = df['Industry'].dropna().unique()
+            # Exclude 'Unknown' from default selection
+            industry_options = ['All'] + sorted([str(v) for v in unique_industries if str(v) != 'Unknown'])
+            if 'Unknown' in unique_industries:
+                industry_options.append('Unknown')
+            
+            selected_industries = st.multiselect(
+                "Select Industries",
+                options=industry_options,
+                default=['All'],
+                key="filter_industry"
+            )
+            if 'All' not in selected_industries:
+                active_filters['Industry'] = selected_industries
         
         # Apply filters
         filtered_df = df.copy()
@@ -289,7 +335,7 @@ else:
         if 'All Clients' not in selected_clients and selected_clients:
             filtered_df = filtered_df[filtered_df['Client'].isin(selected_clients)]
         
-        # Demographic filters
+        # Industry filter
         for col, values in active_filters.items():
             filtered_df = filtered_df[filtered_df[col].isin(values)]
         
@@ -404,41 +450,42 @@ else:
         
         st.info(f"Showing demographics for {len(demo_filtered_df)} responses")
         
-        # Show breakdown for each demographic
-        demo_cols_available = [col for col in demo_cols if col in demo_filtered_df.columns]
-        
-        if demo_cols_available:
-            cols_per_row = 2
-            for i in range(0, len(demo_cols_available), cols_per_row):
-                cols = st.columns(cols_per_row)
-                for idx, demo_col in enumerate(demo_cols_available[i:i+cols_per_row]):
-                    with cols[idx]:
-                        st.subheader(demo_col.replace('What ', '').replace('?', ''))
-                        
-                        value_counts = demo_filtered_df[demo_col].value_counts()
-                        
-                        # Chart
-                        fig = create_bar_chart(
-                            value_counts.head(10),  # Top 10 values
-                            "",
-                            "",
-                            "Count"
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Summary stats
-                        st.caption(f"Unique values: {len(value_counts)} | Responses: {value_counts.sum()}")
+        # Show Industry breakdown
+        if 'Industry' in demo_filtered_df.columns:
+            st.subheader("Industry Distribution")
+            
+            industry_counts = demo_filtered_df['Industry'].value_counts()
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                fig = create_bar_chart(
+                    industry_counts,
+                    "Responses by Industry",
+                    "Industry",
+                    "Count"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.markdown("**Industry Breakdown:**")
+                industry_df = pd.DataFrame({
+                    'Industry': industry_counts.index,
+                    'Count': industry_counts.values,
+                    'Percentage': (industry_counts.values / len(demo_filtered_df) * 100).round(1)
+                })
+                st.dataframe(industry_df, hide_index=True, height=400)
     
     with tab3:
         st.header("Raw Data View")
         st.markdown("Browse and download the complete dataset")
         
         # Column selector
-        available_columns = ['Client'] + question_cols
+        available_columns = ['Client', 'Industry'] + question_cols
         selected_columns = st.multiselect(
             "Select columns to display",
             options=available_columns,
-            default=['Client'] + question_cols[:5]  # Show first 5 questions by default
+            default=['Client', 'Industry'] + question_cols[:5]  # Show first 5 questions by default
         )
         
         if selected_columns:
@@ -483,10 +530,11 @@ else:
             summary_data = []
             for client in df['Client'].unique():
                 client_df = df[df['Client'] == client]
+                industry = client_df['Industry'].iloc[0] if len(client_df) > 0 else 'Unknown'
                 summary_data.append({
                     'Client': client,
-                    'Total Responses': len(client_df),
-                    'Response Rate': '—'  # Could calculate if you have invitation data
+                    'Industry': industry,
+                    'Total Responses': len(client_df)
                 })
             
             summary_df = pd.DataFrame(summary_data)
@@ -509,15 +557,16 @@ else:
     ### How to use this tool:
     
     1. **Add Data**: Place your client survey Excel files in the `data` folder
-    2. **Load Data**: Click "Refresh Data" in the sidebar
-    3. **Explore Questions**: Use the Question Explorer tab to analyze individual questions with filters
-    4. **View Demographics**: Analyze the demographic breakdown of respondents
-    5. **Access Raw Data**: View and download the complete dataset
-    6. **Export**: Download filtered data and summary statistics
+    2. **Create Industry Mapping**: Create `client_industry_mapping.xlsx` with columns 'Client' and 'Industry'
+    3. **Load Data**: Click "Refresh Data" in the sidebar
+    4. **Explore Questions**: Use the Question Explorer tab to analyze individual questions with filters
+    5. **View Demographics**: Analyze the demographic breakdown of respondents
+    6. **Access Raw Data**: View and download the complete dataset
+    7. **Export**: Download filtered data and summary statistics
     
     ### Features:
     - ✅ Automatically loads all client surveys from one location
-    - ✅ Filter by client, demographics, and custom criteria
+    - ✅ Filter by client and industry
     - ✅ Visualize response distributions with charts
     - ✅ Handle single-select, multi-select, and free-response questions
     - ✅ Export filtered data and summaries
@@ -527,7 +576,7 @@ else:
     **For the person managing the data (Taylor):**
     1. Create a folder called `data` in the same location as this app
     2. Add all your client Excel files to that folder
-    3. Each file should have a "Raw Data" sheet with questions as column headers
+    3. Create `client_industry_mapping.xlsx` with two columns: 'Client' and 'Industry'
     4. Click "Refresh Data" to load everything
     
     **For everyone else:**
@@ -536,14 +585,16 @@ else:
     
     ### Adding New Surveys:
     1. Add new Excel file to the `data` folder
-    2. Click "Refresh Data" in the sidebar
-    3. New data appears instantly for everyone
+    2. Add client name and industry to `client_industry_mapping.xlsx`
+    3. Click "Refresh Data" in the sidebar
+    4. New data appears instantly for everyone
     """)
     
     # Show helpful info about data folder
     data_path = Path('data')
     if data_path.exists():
-        excel_count = len(list(data_path.glob('*.xlsx')) + list(data_path.glob('*.xls')))
+        excel_count = len([f for f in list(data_path.glob('*.xlsx')) + list(data_path.glob('*.xls')) 
+                          if 'client_industry_mapping' not in f.name.lower()])
         if excel_count > 0:
             st.success(f"✓ Found {excel_count} Excel file(s) in the data folder. Click 'Refresh Data' to load them.")
         else:

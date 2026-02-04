@@ -58,11 +58,6 @@ def clean_excel_data(df, client_name):
                 cols[idx] = f"{dup}_{i}"
     df.columns = cols
     
-    # Convert all columns to string type to avoid Arrow serialization issues
-    for col in df.columns:
-        if col not in ['Participant Identifier']:
-            df[col] = df[col].astype(str)
-    
     # Add client identifier
     df['Client'] = client_name
     
@@ -471,7 +466,11 @@ if st.session_state.combined_data is not None:
                     'Count': option_counts.values,
                     'Percentage': (option_counts.values / len(question_data) * 100).round(1)
                 })
-                st.dataframe(result_df, hide_index=True, use_container_width=True)
+                # Convert to string for display to avoid Arrow serialization issues
+                display_df = result_df.copy()
+                for col in display_df.columns:
+                    display_df[col] = display_df[col].astype(str)
+                st.dataframe(display_df, hide_index=True, use_container_width=True)
             
             elif question_type == 'free-response':
                 st.caption("Free response question")
@@ -517,7 +516,11 @@ if st.session_state.combined_data is not None:
                     'Count': value_counts.values,
                     'Percentage': (value_counts.values / len(question_data) * 100).round(1)
                 })
-                st.dataframe(result_df, hide_index=True, use_container_width=True)
+                # Convert to string for display to avoid Arrow serialization issues
+                display_df = result_df.copy()
+                for col in display_df.columns:
+                    display_df[col] = display_df[col].astype(str)
+                st.dataframe(display_df, hide_index=True, use_container_width=True)
     
     with tab2:
         st.header("Demographic Analysis")
@@ -560,7 +563,11 @@ if st.session_state.combined_data is not None:
                     'Count': industry_counts.values,
                     'Percentage': (industry_counts.values / len(demo_filtered_df) * 100).round(1)
                 })
-                st.dataframe(industry_df, hide_index=True, use_container_width=True)
+                # Convert to string for display to avoid Arrow serialization issues
+                display_df = industry_df.copy()
+                for col in display_df.columns:
+                    display_df[col] = display_df[col].astype(str)
+                st.dataframe(display_df, hide_index=True, use_container_width=True)
         
         with col2:
             # Proficiency breakdown
@@ -582,7 +589,11 @@ if st.session_state.combined_data is not None:
                     'Count': proficiency_counts.values,
                     'Percentage': (proficiency_counts.values / len(demo_filtered_df) * 100).round(1)
                 })
-                st.dataframe(proficiency_df, hide_index=True, use_container_width=True)
+                # Convert to string for display to avoid Arrow serialization issues
+                display_df = proficiency_df.copy()
+                for col in display_df.columns:
+                    display_df[col] = display_df[col].astype(str)
+                st.dataframe(display_df, hide_index=True, use_container_width=True)
     
     with tab3:
         st.header("Raw Data View")
@@ -599,11 +610,15 @@ if st.session_state.combined_data is not None:
         if selected_columns:
             display_df = df[selected_columns].copy()
             
+            # Convert to string for display to avoid Arrow serialization issues
+            for col in display_df.columns:
+                display_df[col] = display_df[col].astype(str)
+            
             # Show data
             st.dataframe(display_df, use_container_width=True, height=500)
             
             # Download option
-            csv = display_df.to_csv(index=False)
+            csv = df[selected_columns].to_csv(index=False)
             st.download_button(
                 "📥 Download Current View (CSV)",
                 csv,
@@ -654,7 +669,12 @@ if st.session_state.combined_data is not None:
                 })
             
             summary_df = pd.DataFrame(summary_data)
-            st.dataframe(summary_df, hide_index=True, use_container_width=True)
+            
+            # Convert to string for display to avoid Arrow serialization issues
+            display_summary = summary_df.copy()
+            for col in display_summary.columns:
+                display_summary[col] = display_summary[col].astype(str)
+            st.dataframe(display_summary, hide_index=True, use_container_width=True)
             
             csv_summary = summary_df.to_csv(index=False)
             st.download_button(

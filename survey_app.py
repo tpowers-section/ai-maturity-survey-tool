@@ -56,15 +56,9 @@ def clean_excel_data(df, client_name):
     if 'Participant Identifier' in df.columns:
         df['Participant ID'] = pd.to_numeric(df['Participant Identifier'], errors='coerce')
     
-    # Look for proficiency column (might be called "Proficiency", "Rating", or "AI Proficiency")
-    proficiency_col = None
-    for col in df.columns:
-        if 'proficiency' in str(col).lower() or 'rating' in str(col).lower():
-            proficiency_col = col
-            break
-    
-    if proficiency_col and proficiency_col != 'Proficiency':
-        df['Proficiency'] = df[proficiency_col]
+    # Map Rating column to Proficiency
+    if 'Rating' in df.columns:
+        df['Proficiency'] = df['Rating']
     elif 'Proficiency' not in df.columns:
         df['Proficiency'] = 'Unknown'
     

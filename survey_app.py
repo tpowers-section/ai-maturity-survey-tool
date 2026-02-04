@@ -504,25 +504,42 @@ def get_valid_responses():
     }
 
 def filter_valid_responses(series, question_text):
-    """Filter responses using strict whitelist with normalized matching"""
-    valid_responses_dict = get_valid_responses()
+    """Minimal filtering - only remove obvious garbage/contamination"""
     
-    # Get valid responses for this question
-    valid_options = valid_responses_dict.get(question_text, [])
+    def is_obviously_invalid(value):
+        """Check if response is obviously invalid"""
+        if pd.isna(value) or value == '':
+            return True
+        
+        value_str = str(value).strip()
+        
+        # Filter very long responses (likely contamination or free text in wrong field)
+        if len(value_str) > 200:
+            return True
+        
+        # Filter responses with multiple sentences (3+ periods)
+        if value_str.count('.') >= 3:
+            return True
+        
+        # Otherwise keep it
+        return False
     
-    if not valid_options:
-        # No whitelist for this question, return as-is
-        return series
+    # Apply minimal filter
+    filtered = series[~series.apply(is_obviously_invalid)]
     
-    # Normalize to canonical form
-    def normalize_canonical(text):
-        """Convert text to canonical form for comparison"""
+    return filtered
+
+def normalize_for_display(series):
+    """Normalize responses to group similar variations together"""
+    
+    def normalize_text(text):
+        """Convert text to standardized form"""
         if pd.isna(text) or text == '':
             return ''
         
         text = str(text).strip()
         
-        # Replace ALL apostrophe/quote variations with standard ones
+        # Replace all apostrophe/quote variations with standard ones
         apostrophe_chars = ["'", "'", "'", "`", "´", "'"]
         for char in apostrophe_chars:
             text = text.replace(char, "'")
@@ -539,38 +556,15 @@ def filter_valid_responses(series, question_text):
         # Normalize whitespace
         text = ' '.join(text.split())
         
-        # Lowercase
-        text = text.lower()
+        # Standardize capitalization - capitalize first letter of each sentence
+        sentences = text.split('. ')
+        sentences = [s.capitalize() for s in sentences]
+        text = '. '.join(sentences)
         
         return text
     
-    # Create normalized whitelist
-    valid_normalized = {normalize_canonical(opt) for opt in valid_options}
-    
-    # Filter function
-    def is_valid(value):
-        if pd.isna(value) or value == '':
-            return False
-        
-        value_str = str(value).strip()
-        
-        # For multi-select, check if ALL parts are valid
-        if ',' in value_str or ';' in value_str:
-            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
-            for part in parts:
-                if not part:
-                    continue
-                if normalize_canonical(part) not in valid_normalized:
-                    return False
-            return True
-        else:
-            # Single select
-            return normalize_canonical(value_str) in valid_normalized
-    
-    # Apply filter
-    filtered = series[series.apply(is_valid)]
-    
-    return filtered
+    return series.apply(normalize_text)
+
 def normalize_yes_no_responses(series, question_text):
     """Normalize True/False responses to Yes/No for display"""
     yes_no_questions = [
@@ -945,10 +939,6 @@ if st.session_state.combined_data is not None:
             filtered_count = len(question_data) - len(question_data_filtered)
             if filtered_count > 0:
                 st.warning(f"⚠️ Filtered out {filtered_count} invalid/contaminated responses")
-                # Show how many responses were filtered out
-            filtered_count = len(question_data) - len(question_data_filtered)
-            if filtered_count > 0:
-                st.warning(f"⚠️ Filtered out {filtered_count} invalid/contaminated responses")
                 
                 # DEBUG: Show what was filtered out
                 with st.expander("🔍 Debug: View filtered responses", expanded=False):
@@ -965,6 +955,9 @@ if st.session_state.combined_data is not None:
                         st.code(f"'{opt}'")
             
             question_data = question_data_filtered
+            
+            # Normalize responses for display (groups similar variations)
+            question_data = normalize_for_display(question_data)
             
             # Normalize True/False to Yes/No for display
             question_data = normalize_yes_no_responses(question_data, selected_question)
@@ -1225,7 +1218,8 @@ else:
     - ✅ Filter by client, industry, and AI proficiency level
     - ✅ Visualize response distributions with charts
     - ✅ Handle single-select, multi-select, and free-response questions
-    - ✅ Advanced response validation with text normalization
+    - ✅ Smart response normalization to group similar variations
+    - ✅ Minimal filtering (only removes obvious garbage)
     - ✅ Automatic True/False to Yes/No conversion for display
     - ✅ Export filtered data and summaries
     - ✅ Toggle between Scored Questions and Organizational Readiness questions

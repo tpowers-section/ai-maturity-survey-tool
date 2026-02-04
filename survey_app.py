@@ -58,6 +58,11 @@ def clean_excel_data(df, client_name):
                 cols[idx] = f"{dup}_{i}"
     df.columns = cols
     
+    # Convert all columns to string type to avoid Arrow serialization issues
+    for col in df.columns:
+        if col not in ['Participant Identifier']:
+            df[col] = df[col].astype(str)
+    
     # Add client identifier
     df['Client'] = client_name
     

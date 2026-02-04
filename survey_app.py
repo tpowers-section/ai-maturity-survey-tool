@@ -80,12 +80,15 @@ def add_industry_column(df, mapping):
     """Add industry column to dataframe based on client mapping"""
     if mapping is None:
         df['Industry'] = 'Unknown'
-        return df, []  # Return empty list for unmapped clients
+        return df, []
     
-    # Map industries
+    # Create a copy to avoid modifying original
+    df = df.copy()
+    
+    # Map industries - this creates the Industry column
     df['Industry'] = df['Client'].map(mapping)
     
-    # Track unmapped clients
+    # Track unmapped clients (clients where Industry is NaN)
     unmapped = df[df['Industry'].isna()]['Client'].unique().tolist()
     
     # Fill unmapped with 'Unknown'

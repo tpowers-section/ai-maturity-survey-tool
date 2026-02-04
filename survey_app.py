@@ -54,6 +54,12 @@ def clean_excel_data(df, client_name):
     if 'Participant Identifier' in df.columns:
         df['Participant ID'] = pd.to_numeric(df['Participant Identifier'], errors='coerce')
     
+    # Extract proficiency rating if it exists
+    if 'Rating' in df.columns:
+        df['Proficiency'] = df['Rating']
+    else:
+        df['Proficiency'] = 'Unknown'
+    
     return df
 
 def load_client_industry_mapping(data_folder='data'):
@@ -127,7 +133,8 @@ def load_data_from_folder(data_folder='data'):
         client_name = file_name.replace('.xlsx', '').replace('.xls', '').split('__')[0]
         
         try:
-            df = pd.read_excel(file_path, sheet_name='Raw Data')
+            # Read from Scoring Sheet instead of Raw Data
+            df = pd.read_excel(file_path, sheet_name='Scoring Sheet')
             df = clean_excel_data(df, client_name)
             all_dfs.append(df)
             loaded_files[file_name] = len(df)
@@ -205,7 +212,7 @@ def get_demographic_columns(df):
 def get_question_columns(df):
     """Get columns that represent survey questions"""
     # Exclude system columns
-    exclude_cols = ['Client', 'Participant ID', 'Participant Identifier', 'Email Address:', 'Email Address', 'Industry']
+    exclude_cols = ['Client', 'Participant ID', 'Participant Identifier', 'Email Address:', 'Email Address', 'Industry', 'Rating', 'Proficiency']
     
     # Get demographic columns to exclude
     demo_cols = get_demographic_columns(df)
@@ -318,25 +325,51 @@ if st.session_state.combined_data is not None:
                 default=['All Clients']
             )
         
-        # Industry filter
-        st.subheader("Filter by Industry")
+        # Filters section
+        st.subheader("Filters")
+        
+        filter_col1, filter_col2 = st.columns(2)
         
         active_filters = {}
-        if 'Industry' in df.columns:
-            unique_industries = df['Industry'].dropna().unique()
-            # Exclude 'Unknown' from default selection
-            industry_options = ['All'] + sorted([str(v) for v in unique_industries if str(v) != 'Unknown'])
-            if 'Unknown' in unique_industries:
-                industry_options.append('Unknown')
-            
-            selected_industries = st.multiselect(
-                "Select Industries",
-                options=industry_options,
-                default=['All'],
-                key="filter_industry"
-            )
-            if 'All' not in selected_industries:
-                active_filters['Industry'] = selected_industries
+        
+        with filter_col1:
+            # Industry filter
+            if 'Industry' in df.columns:
+                unique_industries = df['Industry'].dropna().unique()
+                industry_options = ['All'] + sorted([str(v) for v in unique_industries if str(v) != 'Unknown'])
+                if 'Unknown' in unique_industries:
+                    industry_options.append('Unknown')
+                
+                selected_industries = st.multiselect(
+                    "Industry",
+                    options=industry_options,
+                    default=['All'],
+                    key="filter_industry"
+                )
+                if 'All' not in selected_industries:
+                    active_filters['Industry'] = selected_industries
+        
+        with filter_col2:
+            # Proficiency filter
+            if 'Proficiency' in df.columns:
+                unique_proficiencies = df['Proficiency'].dropna().unique()
+                # Order proficiency levels
+                proficiency_order = ['AI Expert', 'AI Practitioner', 'AI Experimenter', 'AI Novice']
+                ordered_proficiencies = [p for p in proficiency_order if p in unique_proficiencies]
+                # Add any unexpected values
+                other_proficiencies = [p for p in unique_proficiencies if p not in proficiency_order and str(p) != 'Unknown']
+                proficiency_options = ['All'] + ordered_proficiencies + other_proficiencies
+                if 'Unknown' in unique_proficiencies:
+                    proficiency_options.append('Unknown')
+                
+                selected_proficiencies = st.multiselect(
+                    "AI Proficiency Level",
+                    options=proficiency_options,
+                    default=['All'],
+                    key="filter_proficiency"
+                )
+                if 'All' not in selected_proficiencies:
+                    active_filters['Proficiency'] = selected_proficiencies
         
         # Apply filters
         filtered_df = df.copy()
@@ -345,7 +378,7 @@ if st.session_state.combined_data is not None:
         if 'All Clients' not in selected_clients and selected_clients:
             filtered_df = filtered_df[filtered_df['Client'].isin(selected_clients)]
         
-        # Industry filter
+        # Industry and Proficiency filters
         for col, values in active_filters.items():
             filtered_df = filtered_df[filtered_df[col].isin(values)]
         
@@ -456,15 +489,16 @@ if st.session_state.combined_data is not None:
         
         st.info(f"Showing demographics for {len(demo_filtered_df)} responses")
         
-        # Show Industry breakdown
-        if 'Industry' in demo_filtered_df.columns:
-            st.subheader("Industry Distribution")
-            
-            industry_counts = demo_filtered_df['Industry'].value_counts()
-            
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
+        # Show breakdown for Industry and Proficiency
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Industry breakdown
+            if 'Industry' in demo_filtered_df.columns:
+                st.subheader("Industry Distribution")
+                
+                industry_counts = demo_filtered_df['Industry'].value_counts()
+                
                 fig = create_bar_chart(
                     industry_counts,
                     "Responses by Industry",
@@ -472,26 +506,46 @@ if st.session_state.combined_data is not None:
                     "Count"
                 )
                 st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                st.markdown("**Industry Breakdown:**")
+                
                 industry_df = pd.DataFrame({
                     'Industry': industry_counts.index,
                     'Count': industry_counts.values,
                     'Percentage': (industry_counts.values / len(demo_filtered_df) * 100).round(1)
                 })
-                st.dataframe(industry_df, hide_index=True, height=400)
+                st.dataframe(industry_df, hide_index=True, use_container_width=True)
+        
+        with col2:
+            # Proficiency breakdown
+            if 'Proficiency' in demo_filtered_df.columns:
+                st.subheader("AI Proficiency Distribution")
+                
+                proficiency_counts = demo_filtered_df['Proficiency'].value_counts()
+                
+                fig = create_bar_chart(
+                    proficiency_counts,
+                    "Responses by Proficiency Level",
+                    "Proficiency",
+                    "Count"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                proficiency_df = pd.DataFrame({
+                    'Proficiency': proficiency_counts.index,
+                    'Count': proficiency_counts.values,
+                    'Percentage': (proficiency_counts.values / len(demo_filtered_df) * 100).round(1)
+                })
+                st.dataframe(proficiency_df, hide_index=True, use_container_width=True)
     
     with tab3:
         st.header("Raw Data View")
         st.markdown("Browse and download the complete dataset")
         
         # Column selector
-        available_columns = ['Client', 'Industry'] + question_cols
+        available_columns = ['Client', 'Industry', 'Proficiency'] + question_cols
         selected_columns = st.multiselect(
             "Select columns to display",
             options=available_columns,
-            default=['Client', 'Industry'] + question_cols[:5]  # Show first 5 questions by default
+            default=['Client', 'Industry', 'Proficiency'] + question_cols[:5]  # Show first 5 questions by default
         )
         
         if selected_columns:
@@ -537,14 +591,22 @@ if st.session_state.combined_data is not None:
             for client in df['Client'].unique():
                 client_df = df[df['Client'] == client]
                 industry = client_df['Industry'].iloc[0] if len(client_df) > 0 else 'Unknown'
+                
+                # Proficiency breakdown
+                proficiency_counts = client_df['Proficiency'].value_counts()
+                
                 summary_data.append({
                     'Client': client,
                     'Industry': industry,
-                    'Total Responses': len(client_df)
+                    'Total Responses': len(client_df),
+                    'AI Experts': proficiency_counts.get('AI Expert', 0),
+                    'AI Practitioners': proficiency_counts.get('AI Practitioner', 0),
+                    'AI Experimenters': proficiency_counts.get('AI Experimenter', 0),
+                    'AI Novices': proficiency_counts.get('AI Novice', 0)
                 })
             
             summary_df = pd.DataFrame(summary_data)
-            st.dataframe(summary_df, hide_index=True)
+            st.dataframe(summary_df, hide_index=True, use_container_width=True)
             
             csv_summary = summary_df.to_csv(index=False)
             st.download_button(
@@ -572,7 +634,7 @@ else:
     
     ### Features:
     - ✅ Automatically loads all client surveys from one location
-    - ✅ Filter by client and industry
+    - ✅ Filter by client, industry, and AI proficiency level
     - ✅ Visualize response distributions with charts
     - ✅ Handle single-select, multi-select, and free-response questions
     - ✅ Export filtered data and summaries

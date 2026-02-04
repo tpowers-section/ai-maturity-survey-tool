@@ -80,7 +80,7 @@ def add_industry_column(df, mapping):
     """Add industry column to dataframe based on client mapping"""
     if mapping is None:
         df['Industry'] = 'Unknown'
-        return df
+        return df, []  # Return empty list for unmapped clients
     
     # Map industries
     df['Industry'] = df['Client'].map(mapping)

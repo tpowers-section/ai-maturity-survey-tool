@@ -219,26 +219,56 @@ def get_demographic_columns(df):
     
     return demo_cols
 
-def get_question_columns(df):
-    """Get columns that represent survey questions"""
-    # Exclude system columns
-    exclude_cols = ['Client', 'Participant ID', 'Participant Identifier', 'Email Address:', 'Email Address', 'Industry', 'Rating', 'Proficiency']
+def get_question_columns(df, question_type='scored'):
+    """Get columns that represent survey questions - whitelist approach"""
     
-    # Get demographic columns to exclude
-    demo_cols = get_demographic_columns(df)
+    # Scored questions whitelist
+    scored_questions = [
+        'How often do you use AI tools for work-related tasks?',
+        'Which of the following best describes how you typically use AI at work? Select all that apply.',
+        'Which best describes your AI usage patterns at work?',
+        'You need to create a monthly performance summary. How would you use AI for this task?',
+        'Which task would current AI tools (like ChatGPT, Copilot, or Gemini) handle most effectively?',
+        'Which of the following are the main risks of using current LLMs? Select all that apply.',
+        'How can you best protect sensitive information when using AI tools? Select all that apply.',
+        'How often do you verify or fact-check AI-generated content before finalizing or sharing it?',
+        'When fact-checking AI-generated content, which approaches would be helpful? Select all that apply.',
+        'When you use AI, how often do you refine or iterate on your prompts to improve the output?'
+    ]
     
-    # Exclude any remaining metadata columns
+    # Organizational readiness questions whitelist
+    org_readiness_questions = [
+        'Does your company have an AI strategy?',
+        'What visible actions have you noticed as a result of your organization\'s AI strategy?',
+        'How well are your AI initiatives connected to your organization\'s business goals?',
+        'How clearly has your organization explained how your role will evolve as AI is implemented?',
+        'How does your senior leadership team demonstrate their own AI usage?',
+        'How is your company\'s AI strategy being implemented across the organization?',
+        'How well has your company translated its AI strategy into specific usage policies for employees?',
+        'How well does your organization manage AI risks and ethical considerations?',
+        'Who is primarily responsible for driving AI adoption and change management at your company?',
+        'How effective has this approach been at driving AI adoption?',
+        'Have you received any training or support from your company on how to use AI?',
+        'How does your company approach AI usage expectations?',
+        'How well do teams in your organization collaborate to discover and share AI use cases?',
+        'Which of the following best describes how you feel about AI?',
+        'Do you trust AI to support you in your work?',
+        'Which of the following are reasons that limit your AI usage or make you hesitate using AI? Select all that apply.',
+        'Which LLMs are you currently using? Select all that apply.',
+        'Do you know what AI tools are available at your company and how to access them?',
+        'How satisfied are you with the AI tools available to you at work?',
+        'How well do you understand the potential benefits of AI for your specific role?'
+    ]
+    
+    # Choose which whitelist to use
+    whitelist = scored_questions if question_type == 'scored' else org_readiness_questions
+    
+    # Find columns that match the whitelist
     question_cols = []
     for col in df.columns:
-        col_str = str(col)
-        # Skip if in exclude list
-        if col in exclude_cols or col in demo_cols:
-            continue
-        # Skip unnamed columns
-        if col_str.startswith('Unnamed'):
-            continue
-        
-        question_cols.append(col)
+        col_str = str(col).strip()
+        if col_str in whitelist:
+            question_cols.append(col)
     
     return question_cols
 
@@ -331,7 +361,6 @@ if st.session_state.combined_data is not None:
     
     # Get column types
     demo_cols = get_demographic_columns(df)
-    question_cols = get_question_columns(df)
     
     # Tabs for different views
     tab1, tab2, tab3, tab4 = st.tabs(["🔍 Question Explorer", "📈 Demographics", "📋 Raw Data", "📥 Export"])
@@ -339,6 +368,20 @@ if st.session_state.combined_data is not None:
     with tab1:
         st.header("Question Explorer")
         st.markdown("Select a question and apply filters to analyze responses")
+        
+        # Radio button to select question type
+        question_category = st.radio(
+            "Question Category",
+            options=["📊 Scored Questions", "🏢 Organizational Readiness"],
+            horizontal=True,
+            key='question_category'
+        )
+        
+        st.divider()
+        
+        # Determine which questions to show based on selection
+        question_type = 'scored' if '📊' in question_category else 'org'
+        question_cols = get_question_columns(df, question_type=question_type)
         
         col1, col2 = st.columns([2, 1])
         
@@ -427,15 +470,15 @@ if st.session_state.combined_data is not None:
             question_data = filtered_df[selected_question].dropna()
             
             # Determine question type
-            question_type = get_question_type(selected_question, selected_question)
+            question_type_check = get_question_type(selected_question, selected_question)
             
             # Check if data contains commas/semicolons (multi-select indicator)
             sample_values = question_data.astype(str).head(20)
             if any((',' in str(v) or ';' in str(v)) for v in sample_values):
-                question_type = 'multi-select'
+                question_type_check = 'multi-select'
             
             # Display based on type
-            if question_type == 'multi-select':
+            if question_type_check == 'multi-select':
                 st.caption("Multi-select question (respondents could choose multiple options)")
                 
                 option_counts = process_multiselect_column(question_data, get_counts=True)
@@ -459,7 +502,7 @@ if st.session_state.combined_data is not None:
                 })
                 st.dataframe(result_df, hide_index=True, use_container_width=True)
             
-            elif question_type == 'free-response':
+            elif question_type_check == 'free-response':
                 st.caption("Free response question")
                 
                 # Show sample responses
@@ -574,12 +617,15 @@ if st.session_state.combined_data is not None:
         st.header("Raw Data View")
         st.markdown("Browse and download the complete dataset")
         
+        # Get all question columns (both scored and org)
+        all_question_cols = get_question_columns(df, question_type='scored') + get_question_columns(df, question_type='org')
+        
         # Column selector
-        available_columns = ['Client', 'Industry', 'Proficiency'] + question_cols
+        available_columns = ['Client', 'Industry', 'Proficiency'] + all_question_cols
         selected_columns = st.multiselect(
             "Select columns to display",
             options=available_columns,
-            default=['Client', 'Industry', 'Proficiency'] + question_cols[:5]  # Show first 5 questions by default
+            default=['Client', 'Industry', 'Proficiency'] + all_question_cols[:5]  # Show first 5 questions by default
         )
         
         if selected_columns:
@@ -678,6 +724,7 @@ else:
     - ✅ Visualize response distributions with charts
     - ✅ Handle single-select, multi-select, and free-response questions
     - ✅ Export filtered data and summaries
+    - ✅ Toggle between Scored Questions and Organizational Readiness questions
     
     ### Setup Instructions:
     

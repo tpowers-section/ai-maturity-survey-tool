@@ -514,8 +514,19 @@ def filter_valid_responses(series, question_text):
         # No whitelist for this question, return as-is
         return series
     
-    # Create a set for faster lookup (case-insensitive)
-    valid_set = {opt.lower().strip() for opt in valid_options}
+    # Create a set for faster lookup with normalized text
+    def normalize_text(text):
+        """Normalize text for comparison - handle apostrophes, quotes, extra spaces"""
+        text = str(text).strip()
+        # Replace curly apostrophes with straight ones
+        text = text.replace("'", "'").replace("'", "'")
+        # Replace curly quotes with straight ones  
+        text = text.replace(""", '"').replace(""", '"')
+        # Normalize multiple spaces to single space
+        text = ' '.join(text.split())
+        return text.lower()
+    
+    valid_set = {normalize_text(opt) for opt in valid_options}
     
     # Filter function
     def is_valid(value):
@@ -527,9 +538,9 @@ def filter_valid_responses(series, question_text):
         # For multi-select, check if ALL parts are valid
         if ',' in value_str or ';' in value_str:
             parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
-            return all(p.lower() in valid_set for p in parts if p)
+            return all(normalize_text(p) in valid_set for p in parts if p)
         else:
-            return value_str.lower() in valid_set
+            return normalize_text(value_str) in valid_set
     
     # Apply filter
     filtered = series[series.apply(is_valid)]
@@ -1172,7 +1183,7 @@ else:
     - ✅ Filter by client, industry, and AI proficiency level
     - ✅ Visualize response distributions with charts
     - ✅ Handle single-select, multi-select, and free-response questions
-    - ✅ Response validation and filtering to remove contaminated data
+    - ✅ Advanced response validation with text normalization
     - ✅ Automatic True/False to Yes/No conversion for display
     - ✅ Export filtered data and summaries
     - ✅ Toggle between Scored Questions and Organizational Readiness questions

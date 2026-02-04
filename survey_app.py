@@ -504,7 +504,7 @@ def get_valid_responses():
     }
 
 def filter_valid_responses(series, question_text):
-    """Filter responses to only include valid options for the question"""
+    """Filter responses to only remove obvious garbage - be very lenient"""
     valid_responses_dict = get_valid_responses()
     
     # Get valid responses for this question
@@ -514,45 +514,26 @@ def filter_valid_responses(series, question_text):
         # No whitelist for this question, return as-is
         return series
     
-    # Create a more aggressive normalization function
-    def normalize_text(text):
-        """Normalize text for comparison - handle all variations"""
-        text = str(text).strip()
-        
-        # Replace ALL types of apostrophes and quotes with standard ones
-        text = text.replace("'", "'").replace("'", "'").replace("`", "'")
-        text = text.replace(""", '"').replace(""", '"').replace("«", '"').replace("»", '"')
-        
-        # Remove zero-width characters and other invisible unicode
-        text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '')
-        text = text.replace('\ufeff', '')  # BOM
-        
-        # Normalize whitespace - replace all whitespace with single space
-        text = ' '.join(text.split())
-        
-        # Convert to lowercase
-        text = text.lower()
-        
-        return text
-    
-    valid_set = {normalize_text(opt) for opt in valid_options}
-    
-    # Filter function
-    def is_valid(value):
+    # Create a lenient filter that only removes OBVIOUS garbage
+    def is_probably_valid(value):
         if pd.isna(value) or value == '':
             return False
         
         value_str = str(value).strip()
         
-        # For multi-select, check if ALL parts are valid
-        if ',' in value_str or ';' in value_str:
-            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
-            return all(normalize_text(p) in valid_set for p in parts if p)
-        else:
-            return normalize_text(value_str) in valid_set
+        # If it's really long (100+ chars), probably garbage or from another question
+        if len(value_str) > 100:
+            return False
+        
+        # If it contains multiple sentences (more than 2 periods), probably garbage
+        if value_str.count('.') > 2:
+            return False
+        
+        # Otherwise, let it through - we're being VERY lenient
+        return True
     
-    # Apply filter
-    filtered = series[series.apply(is_valid)]
+    # Apply lenient filter
+    filtered = series[series.apply(is_probably_valid)]
     
     return filtered
 

@@ -66,9 +66,16 @@ def load_client_industry_mapping(data_folder='data'):
     try:
         mapping_df = pd.read_excel(mapping_file)
         
+        # Strip whitespace from column names
+        mapping_df.columns = mapping_df.columns.str.strip()
+        
         # Check if required columns exist
         if 'Client' not in mapping_df.columns or 'Industry' not in mapping_df.columns:
             return None, "Mapping file must have 'Client' and 'Industry' columns."
+        
+        # Strip whitespace from values
+        mapping_df['Client'] = mapping_df['Client'].str.strip()
+        mapping_df['Industry'] = mapping_df['Industry'].str.strip()
         
         # Create dictionary mapping
         mapping = dict(zip(mapping_df['Client'], mapping_df['Industry']))
@@ -366,26 +373,24 @@ if st.session_state.combined_data is not None:
                 
                 option_counts = process_multiselect_column(question_data, get_counts=True)
                 
-                col1, col2 = st.columns([2, 1])
+                # Chart on top
+                if len(option_counts) > 0:
+                    fig = create_bar_chart(
+                        option_counts,
+                        f"Response Distribution: {selected_question[:60]}...",
+                        "Response Option",
+                        "Number of Selections"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
                 
-                with col1:
-                    if len(option_counts) > 0:
-                        fig = create_bar_chart(
-                            option_counts,
-                            f"Response Distribution: {selected_question[:60]}...",
-                            "Response Option",
-                            "Number of Selections"
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                
-                with col2:
-                    st.markdown("**Response Counts:**")
-                    result_df = pd.DataFrame({
-                        'Option': option_counts.index,
-                        'Count': option_counts.values,
-                        'Percentage': (option_counts.values / len(question_data) * 100).round(1)
-                    })
-                    st.dataframe(result_df, hide_index=True, height=400)
+                # Table below - full width
+                st.markdown("**Response Counts:**")
+                result_df = pd.DataFrame({
+                    'Option': option_counts.index,
+                    'Count': option_counts.values,
+                    'Percentage': (option_counts.values / len(question_data) * 100).round(1)
+                })
+                st.dataframe(result_df, hide_index=True, use_container_width=True)
             
             elif question_type == 'free-response':
                 st.caption("Free response question")
@@ -415,25 +420,23 @@ if st.session_state.combined_data is not None:
                 
                 value_counts = question_data.value_counts()
                 
-                col1, col2 = st.columns([2, 1])
+                # Chart on top
+                fig = create_bar_chart(
+                    value_counts,
+                    f"Response Distribution: {selected_question[:60]}...",
+                    "Response Option",
+                    "Count"
+                )
+                st.plotly_chart(fig, use_container_width=True)
                 
-                with col1:
-                    fig = create_bar_chart(
-                        value_counts,
-                        f"Response Distribution: {selected_question[:60]}...",
-                        "Response Option",
-                        "Count"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with col2:
-                    st.markdown("**Response Breakdown:**")
-                    result_df = pd.DataFrame({
-                        'Option': value_counts.index,
-                        'Count': value_counts.values,
-                        'Percentage': (value_counts.values / len(question_data) * 100).round(1)
-                    })
-                    st.dataframe(result_df, hide_index=True, height=400)
+                # Table below - full width
+                st.markdown("**Response Breakdown:**")
+                result_df = pd.DataFrame({
+                    'Option': value_counts.index,
+                    'Count': value_counts.values,
+                    'Percentage': (value_counts.values / len(question_data) * 100).round(1)
+                })
+                st.dataframe(result_df, hide_index=True, use_container_width=True)
     
     with tab2:
         st.header("Demographic Analysis")

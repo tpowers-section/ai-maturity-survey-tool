@@ -533,7 +533,40 @@ def get_valid_responses():
     }
 
 def filter_valid_responses(series, question_text):
-    """Minimal filtering - only remove obvious garbage"""
+    """Minimal filtering + smart cross-contamination detection"""
+    valid_responses_dict = get_valid_responses()
+    
+    # Get valid responses for THIS question
+    valid_options = valid_responses_dict.get(question_text, [])
+    
+    # Extract distinctive phrases from THIS question's valid responses
+    def extract_key_words(text):
+        """Extract meaningful words (4+ chars, not common)"""
+        common_words = {'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'been', 
+                       'they', 'their', 'about', 'there', 'what', 'when', 'where', 'which',
+                       'are', 'but', 'not', 'you', 'your', 'all', 'can', 'our', 'some'}
+        words = text.lower().split()
+        return set([w for w in words if len(w) >= 4 and w not in common_words])
+    
+    # Get key words from current question's valid responses
+    current_key_words = set()
+    for option in valid_options:
+        current_key_words.update(extract_key_words(option))
+    
+    # Get key words from OTHER questions' responses
+    other_questions_key_words = {}
+    for other_question, other_options in valid_responses_dict.items():
+        if other_question == question_text:
+            continue
+        
+        other_key_words = set()
+        for option in other_options:
+            other_key_words.update(extract_key_words(option))
+        
+        # Only keep words that are unique to other questions (not in current)
+        unique_to_other = other_key_words - current_key_words
+        if unique_to_other:
+            other_questions_key_words[other_question] = unique_to_other
     
     def is_obviously_invalid(value):
         """Check if response is obviously invalid"""
@@ -542,7 +575,7 @@ def filter_valid_responses(series, question_text):
         
         value_str = str(value).strip()
         
-        # Filter very long responses (likely contamination or free text)
+        # Filter very long responses
         if len(value_str) > 200:
             return True
         
@@ -550,10 +583,21 @@ def filter_valid_responses(series, question_text):
         if value_str.count('.') >= 3:
             return True
         
-        # Otherwise keep it
+        # Check for cross-contamination: does this response contain multiple 
+        # distinctive words from another question's responses?
+        value_words = extract_key_words(value_str)
+        
+        for other_q, other_words in other_questions_key_words.items():
+            # Count how many distinctive words from other question appear here
+            overlap = value_words.intersection(other_words)
+            
+            # If 3+ distinctive words from another question, likely contamination
+            if len(overlap) >= 3:
+                return True
+        
         return False
     
-    # Apply minimal filter
+    # Apply filter
     filtered = series[~series.apply(is_obviously_invalid)]
     
     return filtered

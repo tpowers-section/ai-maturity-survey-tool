@@ -266,6 +266,271 @@ def get_question_columns(df, question_type='scored'):
     
     return question_cols
 
+def get_valid_responses():
+    """Returns a dictionary of valid responses for each question"""
+    return {
+        # Scored Questions
+        'How often do you use AI tools for work-related tasks?': [
+            'Never or rarely',
+            'A few times a month',
+            'Weekly',
+            'Several times a week',
+            'Daily'
+        ],
+        
+        'Which of the following best describes how you typically use AI at work? Select all that apply.': [
+            'Getting quick answers to specific questions or looking up information',
+            "Editing or improving text I've already written (emails, documents, presentations)",
+            'Writing or debugging code, scripts, or formulas',
+            'Creating first drafts of content from scratch (reports, proposals, marketing copy)',
+            'Analyzing data or documents to extract insights or summaries',
+            'Brainstorming ideas, testing concepts, or getting feedback on my thinking',
+            'Building custom prompts, templates, or workflows that I reuse regularly',
+            'Using AI for vibe coding to prototype solutions, apps, or products',
+            "I don't use AI for work"
+        ],
+        
+        'Which best describes your AI usage patterns at work?': [
+            "I don't use AI for work",
+            'I create fresh prompts each time I use AI',
+            'I maintain a library of prompts that I reuse frequently',
+            "I've built custom AI tools (CustomGPTs, Copilot Agents, Google Gems, Claude Projects) for repetitive tasks",
+            "I've created workflows that connect AI with other systems (Slack, Salesforce, email) using integrations or code"
+        ],
+        
+        'You need to create a monthly performance summary. How would you use AI for this task?': [
+            "Ask AI to write the summary after you've analyzed all the data",
+            'Use AI to help analyze each data source, then compile results manually',
+            'Create a systematic process where AI handles data analysis and summary generation consistently',
+            "I wouldn't use AI for this task"
+        ],
+        
+        'Which task would current AI tools (like ChatGPT, Copilot, or Gemini) handle most effectively?': [
+            "Predicting next week's stock market performance for investment decisions",
+            'Analyzing presentation slides to evaluate both the visual design and written content for consistency',
+            'Providing real-time updates on breaking news events happening right now',
+            'Creating a complete slide deck with visual design for an important client presentation'
+        ],
+        
+        'Which of the following are the main risks of using current LLMs? Select all that apply.': [
+            'Hallucinations (generating false or misleading information)',
+            'Biases in answers',
+            'Data privacy concerns when information is shared with an LLM',
+            'Vulnerability to manipulation by bad actors'
+        ],
+        
+        'How can you best protect sensitive information when using AI tools? Select all that apply.': [
+            'Avoid using AI tools for anything work-related',
+            'Verify that the AI tool has SSL/HTTPS encryption before using it',
+            'Only share information that you would be comfortable sharing internally with a colleague',
+            'Anonymize information by removing identifying details',
+            'Use secure company instances or enterprise plans when available'
+        ],
+        
+        'How often do you verify or fact-check AI-generated content before finalizing or sharing it?': [
+            'Never: I typically trust the output as is',
+            "Rarely: I only verify if something doesn't sound right",
+            'Sometimes: I do a quick check against known data or references',
+            'Always: I routinely cross-check AI outputs with reliable sources'
+        ],
+        
+        'When fact-checking AI-generated content, which approaches would be helpful? Select all that apply.': [
+            'Check if the response uses confident language and specific details',
+            'Use a different AI tool to review and verify the content',
+            'Look for professional formatting and proper grammar',
+            'Cross-reference key claims with reliable external sources',
+            'Verify any calculations or data analysis independently',
+            'Ask the same AI tool to double-check its work for accuracy'
+        ],
+        
+        'When you use AI, how often do you refine or iterate on your prompts to improve the output?': [
+            'Never: I usually just ask once and accept the first response',
+            'Rarely: I only tweak the prompt if something feels obviously off',
+            'Sometimes: I iterate 2-3 times to reach a good result',
+            "Frequently: I systematically refine prompts until I'm satisfied"
+        ],
+        
+        # Organizational Readiness Questions
+        'Does your company have an AI strategy?': [
+            'Yes, we have a formal AI strategy',
+            "We're currently developing an AI strategy",
+            "No, we don't have an AI strategy",
+            "I'm not sure"
+        ],
+        
+        "What visible actions have you noticed as a result of your organization's AI strategy?": [
+            'No visible actions or changes yet',
+            'Leadership talks about AI, but no action taken',
+            'Small AI pilots in a few areas',
+            'AI rollout across multiple departments',
+            'AI fully integrated with clear business results'
+        ],
+        
+        "How well are your AI initiatives connected to your organization's business goals?": [
+            "No connection - AI projects aren't linked to business goals",
+            "Loose connection - We know AI should help but haven't defined how",
+            'Clear connection - AI projects are tied to specific business goals with KPIs',
+            'Not sure'
+        ],
+        
+        'How clearly has your organization explained how your role will evolve as AI is implemented?': [
+            'No explanation of how AI will impact my role',
+            "There's clarity that my role is expected to change, but the specifics aren't clear yet",
+            'Very clear explanation of how my role will evolve with AI'
+        ],
+        
+        'How does your senior leadership team demonstrate their own AI usage?': [
+            'Leaders regularly share how they use AI in their work',
+            'Some leaders occasionally mention using AI',
+            "Leaders talk about AI but don't show personal usage",
+            'Leaders do not talk about AI or show personal usage'
+        ],
+        
+        "How is your company's AI strategy being implemented across the organization?": [
+            "We don't have an approach",
+            'Multiple uncoordinated AI pilots',
+            'We have a central roadmap at the company, team, or functional level',
+            'Not sure'
+        ],
+        
+        "How well has your company translated its AI strategy into specific usage policies for employees?": [
+            'Clear, enforced policies that directly implement our AI strategy',
+            "Some policies exist, but don't clearly connect to our strategy",
+            'We have AI strategy but no specific usage policies',
+            'No clear strategy or policies'
+        ],
+        
+        'How well does your organization manage AI risks and ethical considerations?': [
+            'No policies or guidelines for AI risks or ethics',
+            "Basic usage policies exist but don't address risks or ethical considerations",
+            'Comprehensive policies covering risks and ethics with active monitoring',
+            'Not sure'
+        ],
+        
+        'Who is primarily responsible for driving AI adoption and change management at your company?': [
+            'Centralized AI team or Center of Excellence',
+            'Individual departments and teams',
+            'No clear ownership',
+            "I don't know"
+        ],
+        
+        'How effective has this approach been at driving AI adoption?': [
+            'Very effective - seeing strong adoption and results',
+            'Somewhat effective - making progress but slowly',
+            'Not effective - limited adoption despite efforts',
+            'Too early to tell'
+        ],
+        
+        'Have you received any training or support from your company on how to use AI?': [
+            'Yes',
+            'No'
+        ],
+        
+        'How does your company approach AI usage expectations?': [
+            'No clear expectations about AI usage',
+            'AI usage is encouraged but not incentivized',
+            'AI usage is expected with recognition and rewards',
+            'AI usage is required and tied to performance evaluations'
+        ],
+        
+        'How well do teams in your organization collaborate to discover and share AI use cases?': [
+            'Strong collaboration - regular cross-team sessions and sharing AI use cases',
+            'Some collaboration - occasional sharing of AI use cases between teams',
+            'Limited collaboration - teams work mostly in isolation',
+            "No collaboration that I'm aware of"
+        ],
+        
+        'Which of the following best describes how you feel about AI?': [
+            'Anxious about its implications for me',
+            'Overwhelmed about its implications for me',
+            'Excited about its implications for me'
+        ],
+        
+        'Do you trust AI to support you in your work?': [
+            'Yes',
+            'No'
+        ],
+        
+        'Which of the following are reasons that limit your AI usage or make you hesitate using AI? Select all that apply.': [
+            "I'm worried about hallucinations",
+            "I'm worried about data security or privacy",
+            "I don't know the right use cases or what to use it for",
+            "I'm worried I'll get in trouble with my company",
+            "I'm worried it will be seen as cheating by my company or manager",
+            "I'm worried it will replace me / about the impact on my job",
+            "I don't know how to use it",
+            'Other'
+        ],
+        
+        'Which LLMs are you currently using? Select all that apply.': [
+            'ChatGPT',
+            'Perplexity.ai',
+            'Microsoft Copilot',
+            'Google Gemini',
+            'Claude',
+            'DeepSeek',
+            "xAI's Grok",
+            "Meta's Llama",
+            'Mistral',
+            'Other',
+            "I'm not using any LLMs"
+        ],
+        
+        'Do you know what AI tools are available at your company and how to access them?': [
+            'No sanctioned tools available',
+            "Tools exist but I don't know how to access them",
+            'Tools exist with clear access process',
+            'Not sure'
+        ],
+        
+        'How satisfied are you with the AI tools available to you at work?': [
+            'Very satisfied - they meet all my needs',
+            "Somewhat satisfied - they're helpful but have limitations",
+            "Dissatisfied - they don't meet my needs",
+            "I don't have access to AI tools at work"
+        ],
+        
+        'How well do you understand the potential benefits of AI for your specific role?': [
+            'Very clear - I know exactly how AI can help me',
+            'Somewhat clear - I see some opportunities',
+            'Unclear - I struggle to see how AI applies to my work',
+            "No understanding - AI doesn't seem relevant to my role"
+        ]
+    }
+
+def filter_valid_responses(series, question_text):
+    """Filter responses to only include valid options for the question"""
+    valid_responses_dict = get_valid_responses()
+    
+    # Get valid responses for this question
+    valid_options = valid_responses_dict.get(question_text, [])
+    
+    if not valid_options:
+        # No whitelist for this question, return as-is
+        return series
+    
+    # Create a set for faster lookup (case-insensitive)
+    valid_set = {opt.lower().strip() for opt in valid_options}
+    
+    # Filter function
+    def is_valid(value):
+        if pd.isna(value) or value == '':
+            return False
+        
+        value_str = str(value).strip()
+        
+        # For multi-select, check if ALL parts are valid
+        if ',' in value_str or ';' in value_str:
+            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
+            return all(p.lower() in valid_set for p in parts if p)
+        else:
+            return value_str.lower() in valid_set
+    
+    # Apply filter
+    filtered = series[series.apply(is_valid)]
+    
+    return filtered
+
 # Main app
 st.title("📊 AI Maturity Survey Analysis Tool")
 st.markdown("Upload client survey files and analyze results across multiple surveys")
@@ -608,7 +873,16 @@ if st.session_state.combined_data is not None:
             st.divider()
             st.subheader(f"Analysis: {selected_question}")
             
+            # Apply response filtering
             question_data = filtered_df[selected_question].dropna()
+            question_data_filtered = filter_valid_responses(question_data, selected_question)
+            
+            # Show how many responses were filtered out
+            filtered_count = len(question_data) - len(question_data_filtered)
+            if filtered_count > 0:
+                st.warning(f"⚠️ Filtered out {filtered_count} invalid/contaminated responses")
+            
+            question_data = question_data_filtered
             
             # Determine question type
             question_type_check = get_question_type(selected_question, selected_question)
@@ -866,6 +1140,7 @@ else:
     - ✅ Filter by client, industry, and AI proficiency level
     - ✅ Visualize response distributions with charts
     - ✅ Handle single-select, multi-select, and free-response questions
+    - ✅ Response validation and filtering to remove contaminated data
     - ✅ Export filtered data and summaries
     - ✅ Toggle between Scored Questions and Organizational Readiness questions
     

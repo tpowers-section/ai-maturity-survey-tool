@@ -533,28 +533,101 @@ def get_valid_responses():
     }
 
 def filter_valid_responses(series, question_text):
-    """Minimal filtering - only remove obvious garbage/contamination"""
+    """Filter responses using fuzzy matching against whitelist"""
+    valid_responses_dict = get_valid_responses()
     
-    def is_obviously_invalid(value):
-        """Check if response is obviously invalid"""
+    # Get valid responses for this question
+    valid_options = valid_responses_dict.get(question_text, [])
+    
+    if not valid_options:
+        # No whitelist - use minimal filtering
+        def is_obviously_invalid(value):
+            if pd.isna(value) or value == '':
+                return True
+            value_str = str(value).strip()
+            if len(value_str) > 200:
+                return True
+            if value_str.count('.') >= 3:
+                return True
+            return False
+        
+        filtered = series[~series.apply(is_obviously_invalid)]
+        return filtered
+    
+    # Normalize function for comparison
+    def normalize_for_matching(text):
+        """Normalize text for fuzzy matching"""
+        text = str(text).strip().lower()
+        # Replace apostrophes and quotes
+        for char in ["'", "'", "'", "`", "´", "'"]:
+            text = text.replace(char, "'")
+        for char in [""", """, "«", "»", "„", "‟"]:
+            text = text.replace(char, '"')
+        # Remove invisible chars
+        for char in ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']:
+            text = text.replace(char, '')
+        # Normalize whitespace
+        text = ' '.join(text.split())
+        return text
+    
+    # Create normalized valid options
+    normalized_valid = [normalize_for_matching(opt) for opt in valid_options]
+    
+    # Simple similarity score based on word overlap
+    def similarity_score(text1, text2):
+        """Calculate similarity between two texts based on word overlap"""
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        
+        if not words1 or not words2:
+            return 0
+        
+        # Calculate Jaccard similarity
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        
+        return len(intersection) / len(union) if union else 0
+    
+    # Filter function
+    def is_valid(value):
         if pd.isna(value) or value == '':
-            return True
+            return False
         
         value_str = str(value).strip()
         
-        # Filter very long responses (likely contamination or free text in wrong field)
-        if len(value_str) > 200:
-            return True
+        # Filter obviously invalid
+        if len(value_str) > 200 or value_str.count('.') >= 3:
+            return False
         
-        # Filter responses with multiple sentences (3+ periods)
-        if value_str.count('.') >= 3:
+        # For multi-select, check if ALL parts are valid
+        if ',' in value_str or ';' in value_str:
+            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
+            for part in parts:
+                if not part:
+                    continue
+                normalized_part = normalize_for_matching(part)
+                
+                # Check if this part is similar to any valid option
+                max_similarity = max([similarity_score(normalized_part, valid_opt) 
+                                     for valid_opt in normalized_valid])
+                
+                # Require at least 50% word overlap
+                if max_similarity < 0.5:
+                    return False
             return True
-        
-        # Otherwise keep it
-        return False
+        else:
+            # Single select - check similarity to valid options
+            normalized_value = normalize_for_matching(value_str)
+            
+            # Check similarity to each valid option
+            max_similarity = max([similarity_score(normalized_value, valid_opt) 
+                                 for valid_opt in normalized_valid])
+            
+            # Require at least 50% word overlap
+            return max_similarity >= 0.5
     
-    # Apply minimal filter
-    filtered = series[~series.apply(is_obviously_invalid)]
+    # Apply filter
+    filtered = series[series.apply(is_valid)]
     
     return filtered
 

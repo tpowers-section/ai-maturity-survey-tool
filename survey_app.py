@@ -240,9 +240,33 @@ if st.session_state.combined_data is not None:
                 default=['All Clients']
             )
         
-        # Demographic filters
-        st.subheader("Demographic Filters")
-        filter_cols = st.columns(min(len(demo_cols), 4))
+       # Demographic filters - only show industry for now
+st.subheader("Demographic Filters")
+
+# Find the industry column
+industry_col = None
+for col in demo_cols:
+    if 'industry' in col.lower():
+        industry_col = col
+        break
+
+active_filters = {}
+if industry_col:
+    # Clean up the label
+    label = industry_col.replace('What ', '').replace('?', '').strip()
+    
+    unique_values = df[industry_col].dropna().unique()
+    if len(unique_values) > 0:
+        selected_values = st.multiselect(
+            label,
+            options=['All'] + sorted([str(v) for v in unique_values]),
+            default=['All'],
+            key=f"filter_{industry_col}"
+        )
+        if 'All' not in selected_values:
+            active_filters[industry_col] = selected_values
+else:
+    st.warning("No industry column found in the data")
         
         active_filters = {}
         for idx, demo_col in enumerate(demo_cols[:4]):  # Show first 4 demographic filters

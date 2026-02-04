@@ -504,7 +504,7 @@ def get_valid_responses():
     }
 
 def filter_valid_responses(series, question_text):
-    """Filter responses using whitelist but with lenient text matching"""
+    """Filter responses using strict whitelist with normalized matching"""
     valid_responses_dict = get_valid_responses()
     
     # Get valid responses for this question
@@ -514,35 +514,40 @@ def filter_valid_responses(series, question_text):
         # No whitelist for this question, return as-is
         return series
     
-    # Create multiple normalized versions of each valid option
-    def create_normalized_variations(text):
-        """Create all possible variations of a text for matching"""
-        variations = set()
+    # Normalize to canonical form
+    def normalize_canonical(text):
+        """Convert text to canonical form for comparison"""
+        if pd.isna(text) or text == '':
+            return ''
+        
         text = str(text).strip()
         
-        # Original
-        variations.add(text)
-        variations.add(text.lower())
+        # Replace ALL apostrophe/quote variations with standard ones
+        apostrophe_chars = ["'", "'", "'", "`", "´", "'"]
+        for char in apostrophe_chars:
+            text = text.replace(char, "'")
         
-        # Replace different apostrophe types
-        for apos in ["'", "'", "'", "`"]:
-            variant = text.replace("'", apos)
-            variations.add(variant)
-            variations.add(variant.lower())
+        quote_chars = [""", """, "«", "»", "„", "‟"]
+        for char in quote_chars:
+            text = text.replace(char, '"')
         
-        # With/without extra spaces
-        normalized_spaces = ' '.join(text.split())
-        variations.add(normalized_spaces)
-        variations.add(normalized_spaces.lower())
+        # Remove zero-width and invisible characters
+        invisible_chars = ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']
+        for char in invisible_chars:
+            text = text.replace(char, '')
         
-        return variations
+        # Normalize whitespace
+        text = ' '.join(text.split())
+        
+        # Lowercase
+        text = text.lower()
+        
+        return text
     
-    # Build a comprehensive set of all valid variations
-    all_valid = set()
-    for option in valid_options:
-        all_valid.update(create_normalized_variations(option))
+    # Create normalized whitelist
+    valid_normalized = {normalize_canonical(opt) for opt in valid_options}
     
-    # Filter function - check if value matches ANY variation
+    # Filter function
     def is_valid(value):
         if pd.isna(value) or value == '':
             return False
@@ -552,25 +557,20 @@ def filter_valid_responses(series, question_text):
         # For multi-select, check if ALL parts are valid
         if ',' in value_str or ';' in value_str:
             parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
-            # Check each part against all variations
             for part in parts:
                 if not part:
                     continue
-                # Check if this part matches any valid variation
-                part_variations = create_normalized_variations(part)
-                if not any(v in all_valid for v in part_variations):
+                if normalize_canonical(part) not in valid_normalized:
                     return False
             return True
         else:
-            # Single select - check if value matches any variation
-            value_variations = create_normalized_variations(value_str)
-            return any(v in all_valid for v in value_variations)
+            # Single select
+            return normalize_canonical(value_str) in valid_normalized
     
     # Apply filter
     filtered = series[series.apply(is_valid)]
     
     return filtered
-
 def normalize_yes_no_responses(series, question_text):
     """Normalize True/False responses to Yes/No for display"""
     yes_no_questions = [

@@ -921,6 +921,24 @@ if st.session_state.combined_data is not None:
             filtered_count = len(question_data) - len(question_data_filtered)
             if filtered_count > 0:
                 st.warning(f"⚠️ Filtered out {filtered_count} invalid/contaminated responses")
+                # Show how many responses were filtered out
+            filtered_count = len(question_data) - len(question_data_filtered)
+            if filtered_count > 0:
+                st.warning(f"⚠️ Filtered out {filtered_count} invalid/contaminated responses")
+                
+                # DEBUG: Show what was filtered out
+                with st.expander("🔍 Debug: View filtered responses", expanded=False):
+                    filtered_out = question_data[~question_data.index.isin(question_data_filtered.index)]
+                    unique_filtered = filtered_out.unique()
+                    
+                    st.write("**Responses that were filtered out:**")
+                    for resp in unique_filtered[:20]:  # Show first 20
+                        st.code(f"'{resp}'")
+                    
+                    st.write("**Valid responses in whitelist:**")
+                    valid_options = get_valid_responses().get(selected_question, [])
+                    for opt in valid_options:
+                        st.code(f"'{opt}'")
             
             question_data = question_data_filtered
             

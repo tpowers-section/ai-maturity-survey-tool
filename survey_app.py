@@ -44,19 +44,10 @@ if 'load_errors' not in st.session_state:
     st.session_state.load_errors = []
 
 def clean_excel_data(df, client_name):
-    """Clean and process Excel data from Scoring Sheet"""
-    # For Scoring Sheet: Row 6 (index 5) contains headers, data starts at row 7 (index 6)
-    df.columns = df.iloc[5]  # Row 6 is index 5
-    df = df[6:].reset_index(drop=True)  # Data starts at row 7 (index 6)
-    
-    # Make column names unique by adding suffixes to duplicates (safety fallback for old files)
-    cols = pd.Series(df.columns)
-    for dup in cols[cols.duplicated()].unique():
-        dup_indices = cols[cols == dup].index.tolist()
-        for i, idx in enumerate(dup_indices):
-            if i > 0:  # Keep first occurrence as-is, add suffix to others
-                cols[idx] = f"{dup}_{i}"
-    df.columns = cols
+    """Clean and process Excel data from Raw Data sheet"""
+    # Raw Data sheet has headers in row 2 (index 1), data starts in row 3 (index 2)
+    df.columns = df.iloc[1]  # Row 2 is index 1
+    df = df[2:].reset_index(drop=True)  # Data starts at row 3 (index 2)
     
     # Add client identifier
     df['Client'] = client_name
@@ -65,10 +56,16 @@ def clean_excel_data(df, client_name):
     if 'Participant Identifier' in df.columns:
         df['Participant ID'] = pd.to_numeric(df['Participant Identifier'], errors='coerce')
     
-    # Extract proficiency rating if it exists
-    if 'Rating' in df.columns:
-        df['Proficiency'] = df['Rating']
-    else:
+    # Look for proficiency column (might be called "Proficiency", "Rating", or "AI Proficiency")
+    proficiency_col = None
+    for col in df.columns:
+        if 'proficiency' in str(col).lower() or 'rating' in str(col).lower():
+            proficiency_col = col
+            break
+    
+    if proficiency_col and proficiency_col != 'Proficiency':
+        df['Proficiency'] = df[proficiency_col]
+    elif 'Proficiency' not in df.columns:
         df['Proficiency'] = 'Unknown'
     
     return df
@@ -144,8 +141,8 @@ def load_data_from_folder(data_folder='data'):
         client_name = file_name.replace('.xlsx', '').replace('.xls', '').split('__')[0]
         
         try:
-            # Read from Scoring Sheet with no header (we'll extract it manually)
-            df = pd.read_excel(file_path, sheet_name='Scoring Sheet', header=None)
+            # Read from Raw Data sheet with no header (we'll extract it manually from row 2)
+            df = pd.read_excel(file_path, sheet_name='Raw Data', header=None)
             df = clean_excel_data(df, client_name)
             all_dfs.append(df)
             loaded_files[file_name] = len(df)
@@ -230,21 +227,15 @@ def get_question_columns(df):
     # Get demographic columns to exclude
     demo_cols = get_demographic_columns(df)
     
-    # Exclude score/calculation columns
+    # Exclude any remaining metadata columns
     question_cols = []
     for col in df.columns:
         col_str = str(col)
         # Skip if in exclude list
         if col in exclude_cols or col in demo_cols:
             continue
-        # Skip if it's a score/metadata column - now catches SCORE_1, SCORE_2, etc.
-        if 'SCORE' in col_str.upper() or col_str.startswith('TEXT:') or col_str.startswith('TEMPLATE:'):
-            continue
         # Skip unnamed columns
         if col_str.startswith('Unnamed'):
-            continue
-        # Skip weight/points columns
-        if col_str in ['Weight', 'Potential Points'] or '(out of' in col_str:
             continue
         
         question_cols.append(col)
@@ -466,11 +457,7 @@ if st.session_state.combined_data is not None:
                     'Count': option_counts.values,
                     'Percentage': (option_counts.values / len(question_data) * 100).round(1)
                 })
-                # Convert to string for display to avoid Arrow serialization issues
-                display_df = result_df.copy()
-                for col in display_df.columns:
-                    display_df[col] = display_df[col].astype(str)
-                st.dataframe(display_df, hide_index=True, use_container_width=True)
+                st.dataframe(result_df, hide_index=True, use_container_width=True)
             
             elif question_type == 'free-response':
                 st.caption("Free response question")
@@ -516,11 +503,7 @@ if st.session_state.combined_data is not None:
                     'Count': value_counts.values,
                     'Percentage': (value_counts.values / len(question_data) * 100).round(1)
                 })
-                # Convert to string for display to avoid Arrow serialization issues
-                display_df = result_df.copy()
-                for col in display_df.columns:
-                    display_df[col] = display_df[col].astype(str)
-                st.dataframe(display_df, hide_index=True, use_container_width=True)
+                st.dataframe(result_df, hide_index=True, use_container_width=True)
     
     with tab2:
         st.header("Demographic Analysis")
@@ -563,11 +546,7 @@ if st.session_state.combined_data is not None:
                     'Count': industry_counts.values,
                     'Percentage': (industry_counts.values / len(demo_filtered_df) * 100).round(1)
                 })
-                # Convert to string for display to avoid Arrow serialization issues
-                display_df = industry_df.copy()
-                for col in display_df.columns:
-                    display_df[col] = display_df[col].astype(str)
-                st.dataframe(display_df, hide_index=True, use_container_width=True)
+                st.dataframe(industry_df, hide_index=True, use_container_width=True)
         
         with col2:
             # Proficiency breakdown
@@ -589,11 +568,7 @@ if st.session_state.combined_data is not None:
                     'Count': proficiency_counts.values,
                     'Percentage': (proficiency_counts.values / len(demo_filtered_df) * 100).round(1)
                 })
-                # Convert to string for display to avoid Arrow serialization issues
-                display_df = proficiency_df.copy()
-                for col in display_df.columns:
-                    display_df[col] = display_df[col].astype(str)
-                st.dataframe(display_df, hide_index=True, use_container_width=True)
+                st.dataframe(proficiency_df, hide_index=True, use_container_width=True)
     
     with tab3:
         st.header("Raw Data View")
@@ -609,10 +584,6 @@ if st.session_state.combined_data is not None:
         
         if selected_columns:
             display_df = df[selected_columns].copy()
-            
-            # Convert to string for display to avoid Arrow serialization issues
-            for col in display_df.columns:
-                display_df[col] = display_df[col].astype(str)
             
             # Show data
             st.dataframe(display_df, use_container_width=True, height=500)
@@ -669,12 +640,7 @@ if st.session_state.combined_data is not None:
                 })
             
             summary_df = pd.DataFrame(summary_data)
-            
-            # Convert to string for display to avoid Arrow serialization issues
-            display_summary = summary_df.copy()
-            for col in display_summary.columns:
-                display_summary[col] = display_summary[col].astype(str)
-            st.dataframe(display_summary, hide_index=True, use_container_width=True)
+            st.dataframe(summary_df, hide_index=True, use_container_width=True)
             
             csv_summary = summary_df.to_csv(index=False)
             st.download_button(
@@ -692,13 +658,19 @@ else:
     st.markdown("""
     ### How to use this tool:
     
-    1. **Add Data**: Place your client survey Excel files in the `data` folder
-    2. **Create Industry Mapping**: Create `client_industry_mapping.xlsx` with columns 'Client' and 'Industry'
-    3. **Load Data**: Click "Refresh Data" in the sidebar
-    4. **Explore Questions**: Use the Question Explorer tab to analyze individual questions with filters
-    5. **View Demographics**: Analyze the demographic breakdown of respondents
-    6. **Access Raw Data**: View and download the complete dataset
-    7. **Export**: Download filtered data and summary statistics
+    1. **Add Data**: Place your client survey Excel files in the `data` folder (using the **Raw Data** sheet)
+    2. **Add Proficiency Column**: Make sure your Raw Data sheet has a "Proficiency" column (in row 2) with values like "AI Expert", "AI Practitioner", etc.
+    3. **Create Industry Mapping**: Create `client_industry_mapping.xlsx` with columns 'Client' and 'Industry'
+    4. **Load Data**: Click "Refresh Data" in the sidebar
+    5. **Explore Questions**: Use the Question Explorer tab to analyze individual questions with filters
+    6. **View Demographics**: Analyze the demographic breakdown of respondents
+    7. **Access Raw Data**: View and download the complete dataset
+    8. **Export**: Download filtered data and summary statistics
+    
+    ### Raw Data Sheet Structure:
+    - **Row 1**: (ignored)
+    - **Row 2**: Column headers/questions
+    - **Row 3+**: Response data
     
     ### Features:
     - ✅ Automatically loads all client surveys from one location
@@ -711,16 +683,17 @@ else:
     
     **For the person managing the data (Taylor):**
     1. Create a folder called `data` in the same location as this app
-    2. Add all your client Excel files to that folder
-    3. Create `client_industry_mapping.xlsx` with two columns: 'Client' and 'Industry'
-    4. Click "Refresh Data" to load everything
+    2. Add all your client Excel files to that folder (must have "Raw Data" sheet)
+    3. Make sure each file has a "Proficiency" column in row 2 of the Raw Data sheet
+    4. Create `client_industry_mapping.xlsx` with two columns: 'Client' and 'Industry'
+    5. Click "Refresh Data" to load everything
     
     **For everyone else:**
     - Just use the app! All data is already loaded
     - Filter and analyze without worrying about uploading files
     
     ### Adding New Surveys:
-    1. Add new Excel file to the `data` folder
+    1. Add new Excel file to the `data` folder (must have "Raw Data" sheet with "Proficiency" column in row 2)
     2. Add client name and industry to `client_industry_mapping.xlsx`
     3. Click "Refresh Data" in the sidebar
     4. New data appears instantly for everyone

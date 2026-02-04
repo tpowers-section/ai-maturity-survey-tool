@@ -40,12 +40,23 @@ if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 if 'unmapped_clients' not in st.session_state:
     st.session_state.unmapped_clients = []
+if 'load_errors' not in st.session_state:
+    st.session_state.load_errors = []
 
 def clean_excel_data(df, client_name):
     """Clean and process Excel data from Scoring Sheet"""
     # For Scoring Sheet: Row 6 (index 5) contains headers, data starts at row 7 (index 6)
     df.columns = df.iloc[5]  # Row 6 is index 5
     df = df[6:].reset_index(drop=True)  # Data starts at row 7 (index 6)
+    
+    # Make column names unique by adding suffixes to duplicates (safety fallback for old files)
+    cols = pd.Series(df.columns)
+    for dup in cols[cols.duplicated()].unique():
+        dup_indices = cols[cols == dup].index.tolist()
+        for i, idx in enumerate(dup_indices):
+            if i > 0:  # Keep first occurrence as-is, add suffix to others
+                cols[idx] = f"{dup}_{i}"
+    df.columns = cols
     
     # Add client identifier
     df['Client'] = client_name
@@ -114,7 +125,7 @@ def load_data_from_folder(data_folder='data'):
     data_path = Path(data_folder)
     
     if not data_path.exists():
-        return None, f"Data folder '{data_folder}' not found. Please create it and add your Excel files."
+        return None, f"Data folder '{data_folder}' not found. Please create it and add your Excel files.", []
     
     excel_files = list(data_path.glob('*.xlsx')) + list(data_path.glob('*.xls'))
     
@@ -122,7 +133,7 @@ def load_data_from_folder(data_folder='data'):
     excel_files = [f for f in excel_files if 'client_industry_mapping' not in f.name.lower()]
     
     if not excel_files:
-        return None, f"No Excel files found in '{data_folder}' folder."
+        return None, f"No Excel files found in '{data_folder}' folder.", []
     
     all_dfs = []
     loaded_files = {}
@@ -139,13 +150,15 @@ def load_data_from_folder(data_folder='data'):
             all_dfs.append(df)
             loaded_files[file_name] = len(df)
         except Exception as e:
-            errors.append(f"Error loading {file_name}: {str(e)}")
+            error_msg = f"Error loading {file_name}: {str(e)}"
+            errors.append(error_msg)
+            print(error_msg)  # Also print to console for debugging
     
     if all_dfs:
         combined_df = pd.concat(all_dfs, ignore_index=True)
-        return (combined_df, loaded_files, errors) if errors else (combined_df, loaded_files, None)
+        return combined_df, loaded_files, errors
     else:
-        return None, "Could not load any files. Check error messages."
+        return None, "Could not load any files. Check error messages.", errors
 
 def process_multiselect_column(series, get_counts=True):
     """Process multi-select columns that contain comma-separated values"""
@@ -224,14 +237,14 @@ def get_question_columns(df):
         # Skip if in exclude list
         if col in exclude_cols or col in demo_cols:
             continue
-        # Skip if it's a score/metadata column
-        if col_str.startswith('SCORE') or col_str.startswith('TEXT:') or col_str.startswith('TEMPLATE:'):
+        # Skip if it's a score/metadata column - now catches SCORE_1, SCORE_2, etc.
+        if 'SCORE' in col_str.upper() or col_str.startswith('TEXT:') or col_str.startswith('TEMPLATE:'):
             continue
         # Skip unnamed columns
         if col_str.startswith('Unnamed'):
             continue
-        # Skip if it's just "SCORE" or contains "(out of"
-        if col_str == 'SCORE' or '(out of' in col_str:
+        # Skip weight/points columns
+        if col_str in ['Weight', 'Potential Points'] or '(out of' in col_str:
             continue
         
         question_cols.append(col)
@@ -261,19 +274,24 @@ with st.sidebar:
             
             if result[0] is not None:
                 combined_df = result[0]
+                loaded_files = result[1]
+                load_errors = result[2] if len(result) > 2 else []
                 
                 # Add industry column
                 combined_df, unmapped = add_industry_column(combined_df, industry_mapping)
                 
                 st.session_state.combined_data = combined_df
-                st.session_state.loaded_files = result[1]
+                st.session_state.loaded_files = loaded_files
                 st.session_state.unmapped_clients = unmapped
+                st.session_state.load_errors = load_errors
                 st.session_state.data_loaded = True
                 
                 # Show errors if any
-                if len(result) > 2 and result[2]:
-                    for error in result[2]:
-                        st.warning(error)
+                if load_errors:
+                    st.error(f"⚠️ Failed to load {len(load_errors)} file(s)")
+                    with st.expander("Show Errors", expanded=True):
+                        for error in load_errors:
+                            st.text(error)
                 
                 # Show unmapped clients
                 if unmapped:
@@ -283,6 +301,10 @@ with st.sidebar:
                 st.success("✓ Data loaded successfully!")
             else:
                 st.error(result[1])
+                if len(result) > 2 and result[2]:
+                    with st.expander("Show Errors", expanded=True):
+                        for error in result[2]:
+                            st.text(error)
                 st.info("👉 To add data: Create a 'data' folder in the same directory as this app and add your Excel files there.")
     
     # Show data summary
@@ -295,6 +317,12 @@ with st.sidebar:
         with st.expander("📄 Loaded Files", expanded=False):
             for file_name, row_count in st.session_state.loaded_files.items():
                 st.text(f"• {file_name}: {row_count} responses")
+        
+        # Show load errors if any
+        if st.session_state.load_errors:
+            with st.expander("⚠️ Load Errors", expanded=False):
+                for error in st.session_state.load_errors:
+                    st.text(error)
         
         # Show unmapped clients if any
         if st.session_state.unmapped_clients:

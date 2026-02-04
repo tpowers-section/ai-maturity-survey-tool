@@ -533,26 +533,30 @@ def get_valid_responses():
     }
 
 def filter_valid_responses(series, question_text):
-    """Filter out responses that clearly belong to other questions (blacklist approach)"""
-    valid_responses_dict = get_valid_responses()
+    """Minimal filtering - only remove obvious garbage"""
     
-    # Get valid responses for THIS question
-    valid_options = valid_responses_dict.get(question_text, [])
-    
-    if not valid_options:
-        # No whitelist - use minimal filtering
-        def is_obviously_invalid(value):
-            if pd.isna(value) or value == '':
-                return True
-            value_str = str(value).strip()
-            if len(value_str) > 200:
-                return True
-            if value_str.count('.') >= 3:
-                return True
-            return False
+    def is_obviously_invalid(value):
+        """Check if response is obviously invalid"""
+        if pd.isna(value) or value == '':
+            return True
         
-        filtered = series[~series.apply(is_obviously_invalid)]
-        return filtered
+        value_str = str(value).strip()
+        
+        # Filter very long responses (likely contamination or free text)
+        if len(value_str) > 200:
+            return True
+        
+        # Filter responses with multiple sentences (3+ periods)
+        if value_str.count('.') >= 3:
+            return True
+        
+        # Otherwise keep it
+        return False
+    
+    # Apply minimal filter
+    filtered = series[~series.apply(is_obviously_invalid)]
+    
+    return filtered
     
     # Build a blacklist of key phrases from OTHER questions
     def extract_key_phrases(text):

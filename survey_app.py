@@ -170,19 +170,20 @@ def process_multiselect_column(series, get_counts=True):
     return all_options
 
 def get_question_type(question_text, column_name):
-    """Determine question type based on text"""
+    """Determine question type based on text and whitelist"""
     text_lower = str(question_text).lower()
     
-    # Multi-select indicators
-    if 'select all that apply' in text_lower:
-        return 'multi-select'
+    # Check whitelist first - if it has valid responses, it's not free-response
+    valid_responses_dict = get_valid_responses()
+    if question_text in valid_responses_dict:
+        # Has a whitelist - check if multi-select
+        if 'select all that apply' in text_lower:
+            return 'multi-select'
+        else:
+            return 'single-select'
     
-    # Free response indicators
-    if '[free response]' in text_lower or 'describe' in text_lower or 'write' in text_lower:
-        return 'free-response'
-    
-    # Check data for multi-select pattern (contains commas/semicolons)
-    return 'single-select'
+    # Not in whitelist - treat as free response
+    return 'free-response'
 
 def create_bar_chart(data, title, xaxis_title, yaxis_title):
     """Create a styled bar chart"""

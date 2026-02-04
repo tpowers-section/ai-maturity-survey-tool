@@ -423,7 +423,9 @@ def get_valid_responses():
         
         'Have you received any training or support from your company on how to use AI?': [
             'Yes',
-            'No'
+            'No',
+            'True',
+            'False'
         ],
         
         'How does your company approach AI usage expectations?': [
@@ -448,7 +450,9 @@ def get_valid_responses():
         
         'Do you trust AI to support you in your work?': [
             'Yes',
-            'No'
+            'No',
+            'True',
+            'False'
         ],
         
         'Which of the following are reasons that limit your AI usage or make you hesitate using AI? Select all that apply.': [
@@ -530,6 +534,30 @@ def filter_valid_responses(series, question_text):
     filtered = series[series.apply(is_valid)]
     
     return filtered
+
+def normalize_yes_no_responses(series, question_text):
+    """Normalize True/False responses to Yes/No for display"""
+    yes_no_questions = [
+        'Have you received any training or support from your company on how to use AI?',
+        'Do you trust AI to support you in your work?'
+    ]
+    
+    if question_text not in yes_no_questions:
+        return series
+    
+    # Map True/False to Yes/No
+    mapping = {
+        'True': 'Yes',
+        'False': 'No',
+        'true': 'Yes',
+        'false': 'No',
+        'Yes': 'Yes',
+        'No': 'No',
+        'yes': 'Yes',
+        'no': 'No'
+    }
+    
+    return series.map(lambda x: mapping.get(str(x).strip(), x))
 
 # Main app
 st.title("📊 AI Maturity Survey Analysis Tool")
@@ -884,6 +912,9 @@ if st.session_state.combined_data is not None:
             
             question_data = question_data_filtered
             
+            # Normalize True/False to Yes/No for display
+            question_data = normalize_yes_no_responses(question_data, selected_question)
+            
             # Determine question type
             question_type_check = get_question_type(selected_question, selected_question)
             
@@ -1141,6 +1172,7 @@ else:
     - ✅ Visualize response distributions with charts
     - ✅ Handle single-select, multi-select, and free-response questions
     - ✅ Response validation and filtering to remove contaminated data
+    - ✅ Automatic True/False to Yes/No conversion for display
     - ✅ Export filtered data and summaries
     - ✅ Toggle between Scored Questions and Organizational Readiness questions
     

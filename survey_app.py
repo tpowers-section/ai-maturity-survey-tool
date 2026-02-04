@@ -533,7 +533,7 @@ def get_valid_responses():
     }
 
 def filter_valid_responses(series, question_text):
-    """Filter responses using fuzzy matching against whitelist"""
+    """Filter responses using lenient fuzzy matching against whitelist"""
     valid_responses_dict = get_valid_responses()
     
     # Get valid responses for this question
@@ -553,6 +553,111 @@ def filter_valid_responses(series, question_text):
         
         filtered = series[~series.apply(is_obviously_invalid)]
         return filtered
+    
+    # Normalize function for comparison
+    def normalize_for_matching(text):
+        """Normalize text for fuzzy matching"""
+        text = str(text).strip().lower()
+        # Replace apostrophes and quotes
+        for char in ["'", "'", "'", "`", "´", "'"]:
+            text = text.replace(char, "'")
+        for char in [""", """, "«", "»", "„", "‟"]:
+            text = text.replace(char, '"')
+        # Remove invisible chars
+        for char in ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']:
+            text = text.replace(char, '')
+        # Normalize whitespace
+        text = ' '.join(text.split())
+        return text
+    
+    # Create normalized valid options
+    normalized_valid = [normalize_for_matching(opt) for opt in valid_options]
+    
+    # Check if key words from valid option appear in response
+    def has_key_words(response, valid_option):
+        """Check if response contains key words from valid option"""
+        # Extract meaningful words (>3 chars, not common words)
+        common_words = {'the', 'and', 'for', 'with', 'that', 'this', 'from', 'are', 'but', 'not', 'you', 'all', 'can', 'have', 'has', 'had', 'our', 'their'}
+        
+        valid_words = [w for w in valid_option.split() if len(w) > 3 and w not in common_words]
+        response_words = set(response.split())
+        
+        if not valid_words:
+            return False
+        
+        # Count how many key words match
+        matches = sum(1 for word in valid_words if word in response_words)
+        
+        # Need at least 40% of key words to match
+        return (matches / len(valid_words)) >= 0.4
+    
+    # Simple similarity score based on word overlap
+    def similarity_score(text1, text2):
+        """Calculate similarity between two texts based on word overlap"""
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        
+        if not words1 or not words2:
+            return 0
+        
+        # Calculate Jaccard similarity
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        
+        return len(intersection) / len(union) if union else 0
+    
+    # Filter function
+    def is_valid(value):
+        if pd.isna(value) or value == '':
+            return False
+        
+        value_str = str(value).strip()
+        
+        # Filter obviously invalid
+        if len(value_str) > 200 or value_str.count('.') >= 3:
+            return False
+        
+        # For multi-select, check if ALL parts are valid
+        if ',' in value_str or ';' in value_str:
+            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
+            for part in parts:
+                if not part:
+                    continue
+                normalized_part = normalize_for_matching(part)
+                
+                # Check similarity OR key word match
+                is_similar = False
+                for valid_opt in normalized_valid:
+                    sim = similarity_score(normalized_part, valid_opt)
+                    key_match = has_key_words(normalized_part, valid_opt)
+                    
+                    # Accept if either 30% similarity OR key words match
+                    if sim >= 0.3 or key_match:
+                        is_similar = True
+                        break
+                
+                if not is_similar:
+                    return False
+            return True
+        else:
+            # Single select - check similarity to valid options
+            normalized_value = normalize_for_matching(value_str)
+            
+            # Check similarity to each valid option
+            for valid_opt in normalized_valid:
+                sim = similarity_score(normalized_value, valid_opt)
+                key_match = has_key_words(normalized_value, valid_opt)
+                
+                # Accept if either 30% similarity OR key words match
+                if sim >= 0.3 or key_match:
+                    return True
+            
+            return False
+    
+    # Apply filter
+    filtered = series[series.apply(is_valid)]
+    
+    return filtered
     
     # Normalize function for comparison
     def normalize_for_matching(text):

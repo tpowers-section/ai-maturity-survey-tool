@@ -1244,8 +1244,8 @@ if st.session_state.combined_data is not None:
             
             question_data = question_data_filtered
             
-           # Determine question type BEFORE normalization (trust the whitelist, not the data)
-question_type_check = get_question_type(selected_question, selected_question)
+            # Determine question type BEFORE normalization (trust the whitelist, not the data)
+            question_type_check = get_question_type(selected_question, selected_question)
             
             # Only normalize for single-select (multi-select is normalized during processing)
             if question_type_check != 'multi-select':

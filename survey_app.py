@@ -984,28 +984,19 @@ if st.session_state.combined_data is not None:
                         st.code(f"'{opt}'")
             
             question_data = question_data_filtered
-
-# For multi-select, normalization happens in process_multiselect_column
-# For single-select, normalize here for display
-question_type_check = get_question_type(selected_question, selected_question)
-sample_values = question_data.astype(str).head(20)
-if any((',' in str(v) or ';' in str(v)) for v in sample_values):
-    question_type_check = 'multi-select'
-
-# Only normalize for single-select (multi-select is normalized during processing)
-if question_type_check != 'multi-select':
-    question_data = normalize_for_display(question_data)
-
-# Normalize True/False to Yes/No for display
-question_data = normalize_yes_no_responses(question_data, selected_question)
             
-            # Determine question type
+            # Determine question type BEFORE normalization
             question_type_check = get_question_type(selected_question, selected_question)
-            
-            # Check if data contains commas/semicolons (multi-select indicator)
             sample_values = question_data.astype(str).head(20)
             if any((',' in str(v) or ';' in str(v)) for v in sample_values):
                 question_type_check = 'multi-select'
+            
+            # Only normalize for single-select (multi-select is normalized during processing)
+            if question_type_check != 'multi-select':
+                question_data = normalize_for_display(question_data)
+            
+            # Normalize True/False to Yes/No for display
+            question_data = normalize_yes_no_responses(question_data, selected_question)
             
             # Display based on type
             if question_type_check == 'multi-select':
@@ -1256,6 +1247,7 @@ else:
     - ✅ Visualize response distributions with charts
     - ✅ Handle single-select, multi-select, and free-response questions
     - ✅ Smart response normalization to group similar variations
+    - ✅ Multi-select questions properly split and normalized
     - ✅ Minimal filtering (only removes obvious garbage)
     - ✅ Automatic True/False to Yes/No conversion for display
     - ✅ Export filtered data and summaries

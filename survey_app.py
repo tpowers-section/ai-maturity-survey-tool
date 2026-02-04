@@ -533,10 +533,10 @@ def get_valid_responses():
     }
 
 def filter_valid_responses(series, question_text):
-    """Filter responses using lenient fuzzy matching against whitelist"""
+    """Filter out responses that clearly belong to other questions (blacklist approach)"""
     valid_responses_dict = get_valid_responses()
     
-    # Get valid responses for this question
+    # Get valid responses for THIS question
     valid_options = valid_responses_dict.get(question_text, [])
     
     if not valid_options:
@@ -553,6 +553,87 @@ def filter_valid_responses(series, question_text):
         
         filtered = series[~series.apply(is_obviously_invalid)]
         return filtered
+    
+    # Build a blacklist of key phrases from OTHER questions
+    def extract_key_phrases(text):
+        """Extract distinctive phrases (2-4 words) from text"""
+        text = text.lower()
+        words = text.split()
+        phrases = []
+        
+        # 2-word phrases
+        for i in range(len(words) - 1):
+            phrases.append(f"{words[i]} {words[i+1]}")
+        
+        # 3-word phrases
+        for i in range(len(words) - 2):
+            phrases.append(f"{words[i]} {words[i+1]} {words[i+2]}")
+        
+        return phrases
+    
+    # Build blacklist from all OTHER questions
+    blacklist_phrases = set()
+    for other_question, other_options in valid_responses_dict.items():
+        if other_question == question_text:
+            continue  # Skip current question
+        
+        for option in other_options:
+            phrases = extract_key_phrases(option)
+            blacklist_phrases.update(phrases)
+    
+    # Remove phrases that also appear in THIS question's valid responses
+    # (to avoid false positives)
+    current_phrases = set()
+    for option in valid_options:
+        phrases = extract_key_phrases(option)
+        current_phrases.update(phrases)
+    
+    # Final blacklist = phrases in other questions but NOT in current question
+    blacklist_phrases = blacklist_phrases - current_phrases
+    
+    # Filter function
+    def is_valid(value):
+        if pd.isna(value) or value == '':
+            return False
+        
+        value_str = str(value).strip()
+        
+        # Filter obviously invalid
+        if len(value_str) > 200 or value_str.count('.') >= 3:
+            return False
+        
+        # Normalize the value
+        value_lower = value_str.lower()
+        
+        # For multi-select, check each part
+        if ',' in value_str or ';' in value_str:
+            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
+            for part in parts:
+                if not part:
+                    continue
+                
+                part_lower = part.lower()
+                
+                # Check if this part contains blacklisted phrases
+                for phrase in blacklist_phrases:
+                    if phrase in part_lower:
+                        # This part likely belongs to another question
+                        return False
+            
+            return True
+        else:
+            # Single select - check if it contains blacklisted phrases
+            for phrase in blacklist_phrases:
+                if phrase in value_lower:
+                    # This response likely belongs to another question
+                    return False
+            
+            return True
+    
+    # Apply filter
+    filtered = series[series.apply(is_valid)]
+    
+    return filtered
     
     # Normalize function for comparison
     def normalize_for_matching(text):

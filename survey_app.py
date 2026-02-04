@@ -42,10 +42,10 @@ if 'unmapped_clients' not in st.session_state:
     st.session_state.unmapped_clients = []
 
 def clean_excel_data(df, client_name):
-    """Clean and process uploaded Excel data"""
-    # First row contains actual column names
-    df.columns = df.iloc[0]
-    df = df[1:].reset_index(drop=True)
+    """Clean and process Excel data from Scoring Sheet"""
+    # For Scoring Sheet: Row 6 (index 5) contains headers, data starts at row 7 (index 6)
+    df.columns = df.iloc[5]  # Row 6 is index 5
+    df = df[6:].reset_index(drop=True)  # Data starts at row 7 (index 6)
     
     # Add client identifier
     df['Client'] = client_name
@@ -133,8 +133,8 @@ def load_data_from_folder(data_folder='data'):
         client_name = file_name.replace('.xlsx', '').replace('.xls', '').split('__')[0]
         
         try:
-            # Read from Scoring Sheet instead of Raw Data
-            df = pd.read_excel(file_path, sheet_name='Scoring Sheet')
+            # Read from Scoring Sheet with no header (we'll extract it manually)
+            df = pd.read_excel(file_path, sheet_name='Scoring Sheet', header=None)
             df = clean_excel_data(df, client_name)
             all_dfs.append(df)
             loaded_files[file_name] = len(df)
@@ -217,9 +217,24 @@ def get_question_columns(df):
     # Get demographic columns to exclude
     demo_cols = get_demographic_columns(df)
     
-    question_cols = [col for col in df.columns 
-                    if col not in exclude_cols and col not in demo_cols 
-                    and not col.startswith('Unnamed')]
+    # Exclude score/calculation columns
+    question_cols = []
+    for col in df.columns:
+        col_str = str(col)
+        # Skip if in exclude list
+        if col in exclude_cols or col in demo_cols:
+            continue
+        # Skip if it's a score/metadata column
+        if col_str.startswith('SCORE') or col_str.startswith('TEXT:') or col_str.startswith('TEMPLATE:'):
+            continue
+        # Skip unnamed columns
+        if col_str.startswith('Unnamed'):
+            continue
+        # Skip if it's just "SCORE" or contains "(out of"
+        if col_str == 'SCORE' or '(out of' in col_str:
+            continue
+        
+        question_cols.append(col)
     
     return question_cols
 

@@ -504,7 +504,7 @@ def get_valid_responses():
     }
 
 def filter_valid_responses(series, question_text):
-    """Filter responses to only remove obvious garbage - be very lenient"""
+    """Filter responses using whitelist but with lenient text matching"""
     valid_responses_dict = get_valid_responses()
     
     # Get valid responses for this question
@@ -514,26 +514,60 @@ def filter_valid_responses(series, question_text):
         # No whitelist for this question, return as-is
         return series
     
-    # Create a lenient filter that only removes OBVIOUS garbage
-    def is_probably_valid(value):
+    # Create multiple normalized versions of each valid option
+    def create_normalized_variations(text):
+        """Create all possible variations of a text for matching"""
+        variations = set()
+        text = str(text).strip()
+        
+        # Original
+        variations.add(text)
+        variations.add(text.lower())
+        
+        # Replace different apostrophe types
+        for apos in ["'", "'", "'", "`"]:
+            variant = text.replace("'", apos)
+            variations.add(variant)
+            variations.add(variant.lower())
+        
+        # With/without extra spaces
+        normalized_spaces = ' '.join(text.split())
+        variations.add(normalized_spaces)
+        variations.add(normalized_spaces.lower())
+        
+        return variations
+    
+    # Build a comprehensive set of all valid variations
+    all_valid = set()
+    for option in valid_options:
+        all_valid.update(create_normalized_variations(option))
+    
+    # Filter function - check if value matches ANY variation
+    def is_valid(value):
         if pd.isna(value) or value == '':
             return False
         
         value_str = str(value).strip()
         
-        # If it's really long (100+ chars), probably garbage or from another question
-        if len(value_str) > 100:
-            return False
-        
-        # If it contains multiple sentences (more than 2 periods), probably garbage
-        if value_str.count('.') > 2:
-            return False
-        
-        # Otherwise, let it through - we're being VERY lenient
-        return True
+        # For multi-select, check if ALL parts are valid
+        if ',' in value_str or ';' in value_str:
+            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
+            # Check each part against all variations
+            for part in parts:
+                if not part:
+                    continue
+                # Check if this part matches any valid variation
+                part_variations = create_normalized_variations(part)
+                if not any(v in all_valid for v in part_variations):
+                    return False
+            return True
+        else:
+            # Single select - check if value matches any variation
+            value_variations = create_normalized_variations(value_str)
+            return any(v in all_valid for v in value_variations)
     
-    # Apply lenient filter
-    filtered = series[series.apply(is_probably_valid)]
+    # Apply filter
+    filtered = series[series.apply(is_valid)]
     
     return filtered
 

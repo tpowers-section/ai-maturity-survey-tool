@@ -152,46 +152,70 @@ def load_data_from_folder(data_folder='data'):
         return None, "Could not load any files. Check error messages.", errors
 
 def process_multiselect_column(series, get_counts=True):
-    """Process multi-select columns that contain comma-separated values"""
+    """Process multi-select columns by matching against whitelist options"""
     # Handle NaN values
     series = series.fillna('')
     
+    # Get the question text from the series name (column name)
+    # We'll need to match against the whitelist
+    valid_responses_dict = get_valid_responses()
+    
+    # Try to find which question this series belongs to by matching column name
+    question_text = series.name if hasattr(series, 'name') else None
+    valid_options = valid_responses_dict.get(question_text, [])
+    
+    # Normalize function
+    def normalize_text(text):
+        """Normalize text for matching"""
+        text = str(text).strip()
+        # Replace apostrophes and quotes
+        for char in ["'", "'", "'", "`", "´", "'"]:
+            text = text.replace(char, "'")
+        for char in [""", """, "«", "»", "„", "‟"]:
+            text = text.replace(char, '"')
+        # Remove invisible chars
+        for char in ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']:
+            text = text.replace(char, '')
+        # Normalize whitespace
+        text = ' '.join(text.split())
+        return text
+    
     all_options = []
+    
     for value in series:
         if pd.isna(value) or value == '':
             continue
-        # Split by semicolon or comma
-        options = [opt.strip() for opt in str(value).replace(';', ',').split(',') if opt.strip()]
         
-        # Normalize each individual option
-        normalized_options = []
-        for opt in options:
-            # Apply the same normalization as normalize_for_display
-            normalized = opt.strip()
-            
-            # Replace apostrophe/quote variations
-            apostrophe_chars = ["'", "'", "'", "`", "´", "'"]
-            for char in apostrophe_chars:
-                normalized = normalized.replace(char, "'")
-            
-            quote_chars = [""", """, "«", "»", "„", "‟"]
-            for char in quote_chars:
-                normalized = normalized.replace(char, '"')
-            
-            # Remove invisible characters
-            invisible_chars = ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']
-            for char in invisible_chars:
-                normalized = normalized.replace(char, '')
-            
-            # Normalize whitespace
-            normalized = ' '.join(normalized.split())
-            
-            # Capitalize
-            normalized = normalized.capitalize()
-            
-            normalized_options.append(normalized)
+        value_str = str(value).strip()
+        normalized_value = normalize_text(value_str).lower()
         
-        all_options.extend(normalized_options)
+        # Try to find which valid options are present in this response
+        matched_options = []
+        
+        for valid_option in valid_options:
+            normalized_option = normalize_text(valid_option).lower()
+            
+            # Check if this valid option appears in the response
+            # Use a simple substring check since responses might have multiple options concatenated
+            if normalized_option in normalized_value:
+                matched_options.append(valid_option)
+        
+        # If we found matches using whitelist, use those
+        if matched_options:
+            # Apply display normalization to each matched option
+            for opt in matched_options:
+                normalized = normalize_text(opt)
+                normalized = normalized.capitalize()
+                all_options.append(normalized)
+        else:
+            # Fallback: split by delimiter if no whitelist match
+            # This handles cases where the whitelist might be incomplete
+            parts = [p.strip() for p in value_str.replace(';', ',').split(',') if p.strip()]
+            
+            for part in parts:
+                normalized = normalize_text(part)
+                normalized = normalized.capitalize()
+                all_options.append(normalized)
     
     if get_counts:
         option_counts = pd.Series(all_options).value_counts()
@@ -533,18 +557,21 @@ def get_valid_responses():
     }
 
 def filter_valid_responses(series, question_text):
-    """Minimal filtering + smart cross-contamination detection"""
+    """Minimal filtering + smart cross-contamination detection (lenient for multi-select)"""
     valid_responses_dict = get_valid_responses()
     
     # Get valid responses for THIS question
     valid_options = valid_responses_dict.get(question_text, [])
+    
+    # Check if this is a multi-select question
+    is_multi_select = 'select all that apply' in question_text.lower()
     
     # Extract distinctive phrases from THIS question's valid responses
     def extract_key_words(text):
         """Extract meaningful words (4+ chars, not common)"""
         common_words = {'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'been', 
                        'they', 'their', 'about', 'there', 'what', 'when', 'where', 'which',
-                       'are', 'but', 'not', 'you', 'your', 'all', 'can', 'our', 'some'}
+                       'are', 'but', 'not', 'you', 'your', 'all', 'can', 'our', 'some', 'will'}
         words = text.lower().split()
         return set([w for w in words if len(w) >= 4 and w not in common_words])
     
@@ -568,20 +595,6 @@ def filter_valid_responses(series, question_text):
         if unique_to_other:
             other_questions_key_words[other_question] = unique_to_other
     
-    def check_contamination(text):
-        """Check if a single response part is cross-contamination"""
-        text_words = extract_key_words(text)
-        
-        for other_q, other_words in other_questions_key_words.items():
-            # Count how many distinctive words from other question appear here
-            overlap = text_words.intersection(other_words)
-            
-            # If 3+ distinctive words from another question, likely contamination
-            if len(overlap) >= 3:
-                return True
-        
-        return False
-    
     def is_obviously_invalid(value):
         """Check if response is obviously invalid"""
         if pd.isna(value) or value == '':
@@ -597,19 +610,21 @@ def filter_valid_responses(series, question_text):
         if value_str.count('.') >= 3:
             return True
         
-        # For multi-select, check EACH part separately
-        if ',' in value_str or ';' in value_str:
-            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
-            for part in parts:
-                if not part:
-                    continue
-                # If ANY part is contaminated, filter the whole response
-                if check_contamination(part):
-                    return True
+        # Skip cross-contamination check for multi-select (too many false positives)
+        if is_multi_select:
             return False
-        else:
-            # Single select - check the whole response
-            return check_contamination(value_str)
+        
+        # For single-select, check for cross-contamination
+        value_words = extract_key_words(value_str)
+        
+        for other_q, other_words in other_questions_key_words.items():
+            overlap = value_words.intersection(other_words)
+            
+            # If 3+ distinctive words from another question, likely contamination
+            if len(overlap) >= 3:
+                return True
+        
+        return False
     
     # Apply filter
     filtered = series[~series.apply(is_obviously_invalid)]

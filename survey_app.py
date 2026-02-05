@@ -157,7 +157,6 @@ def process_multiselect_column(series, get_counts=True):
     series = series.fillna('')
     
     # Get the question text from the series name (column name)
-    # We'll need to match against the whitelist
     valid_responses_dict = get_valid_responses()
     
     # Try to find which question this series belongs to by matching column name
@@ -180,6 +179,9 @@ def process_multiselect_column(series, get_counts=True):
         text = ' '.join(text.split())
         return text
     
+    # Normalize all valid options once
+    normalized_valid_options = {normalize_text(opt).lower(): opt for opt in valid_options}
+    
     all_options = []
     
     for value in series:
@@ -187,35 +189,60 @@ def process_multiselect_column(series, get_counts=True):
             continue
         
         value_str = str(value).strip()
-        normalized_value = normalize_text(value_str).lower()
         
-        # Try to find which valid options are present in this response
-        matched_options = []
+        # FIRST: Split by semicolon (primary delimiter for multi-select)
+        # DO NOT split by comma yet - commas might be inside answer options
+        parts = [p.strip() for p in value_str.split(';') if p.strip()]
         
-        for valid_option in valid_options:
-            normalized_option = normalize_text(valid_option).lower()
+        # If no semicolons, might be comma-delimited (but be careful)
+        if len(parts) == 1 and ',' in value_str:
+            # Check if this matches any complete valid option first
+            normalized_value = normalize_text(value_str).lower()
+            if normalized_value in normalized_valid_options:
+                # It's a complete match, don't split
+                parts = [value_str]
+            else:
+                # Try splitting by comma
+                parts = [p.strip() for p in value_str.split(',') if p.strip()]
+        
+        # For each part, try to match against valid options
+        for part in parts:
+            if not part:
+                continue
             
-            # Check if this valid option appears in the response
-            # Use a simple substring check since responses might have multiple options concatenated
-            if normalized_option in normalized_value:
-                matched_options.append(valid_option)
-        
-        # If we found matches using whitelist, use those
-        if matched_options:
-            # Apply display normalization to each matched option
-            for opt in matched_options:
-                normalized = normalize_text(opt)
+            normalized_part = normalize_text(part).lower()
+            
+            # Try exact match first
+            if normalized_part in normalized_valid_options:
+                matched_option = normalized_valid_options[normalized_part]
+                normalized = normalize_text(matched_option)
                 normalized = normalized.capitalize()
                 all_options.append(normalized)
-        else:
-            # Fallback: split by delimiter if no whitelist match
-            # This handles cases where the whitelist might be incomplete
-            parts = [p.strip() for p in value_str.replace(';', ',').split(',') if p.strip()]
-            
-            for part in parts:
-                normalized = normalize_text(part)
-                normalized = normalized.capitalize()
-                all_options.append(normalized)
+            else:
+                # Try substring match (in case of partial text variations)
+                matched = False
+                for norm_opt, original_opt in normalized_valid_options.items():
+                    # Check if the part is very similar to a valid option
+                    # (at least 70% of words match)
+                    part_words = set(normalized_part.split())
+                    opt_words = set(norm_opt.split())
+                    
+                    if part_words and opt_words:
+                        overlap = len(part_words.intersection(opt_words))
+                        similarity = overlap / max(len(part_words), len(opt_words))
+                        
+                        if similarity >= 0.7:
+                            normalized = normalize_text(original_opt)
+                            normalized = normalized.capitalize()
+                            all_options.append(normalized)
+                            matched = True
+                            break
+                
+                # If still no match, use the part as-is (fallback)
+                if not matched:
+                    normalized = normalize_text(part)
+                    normalized = normalized.capitalize()
+                    all_options.append(normalized)
     
     if get_counts:
         option_counts = pd.Series(all_options).value_counts()
@@ -602,6 +629,16 @@ def filter_valid_responses(series, question_text):
         
         value_str = str(value).strip()
         
+        # For multi-select, be VERY lenient (only filter extreme cases)
+        if is_multi_select:
+            # Only filter if absurdly long (someone pasted essay) or has many sentences
+            if len(value_str) > 1000:
+                return True
+            if value_str.count('.') >= 5:
+                return True
+            return False
+        
+        # For single-select, use stricter filtering
         # Filter very long responses
         if len(value_str) > 200:
             return True
@@ -610,11 +647,7 @@ def filter_valid_responses(series, question_text):
         if value_str.count('.') >= 3:
             return True
         
-        # Skip cross-contamination check for multi-select (too many false positives)
-        if is_multi_select:
-            return False
-        
-        # For single-select, check for cross-contamination
+        # Check for cross-contamination
         value_words = extract_key_words(value_str)
         
         for other_q, other_words in other_questions_key_words.items():
@@ -625,11 +658,6 @@ def filter_valid_responses(series, question_text):
                 return True
         
         return False
-    
-    # Apply filter
-    filtered = series[~series.apply(is_obviously_invalid)]
-    
-    return filtered
     
     # Apply filter
     filtered = series[~series.apply(is_obviously_invalid)]

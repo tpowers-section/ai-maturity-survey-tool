@@ -152,7 +152,7 @@ def load_data_from_folder(data_folder='data'):
         return None, "Could not load any files. Check error messages.", errors
 
 def process_multiselect_column(series, get_counts=True):
-    """Process multi-select columns by matching against whitelist options"""
+    """Process multi-select columns by finding valid options in responses"""
     # Handle NaN values
     series = series.fillna('')
     
@@ -179,9 +179,6 @@ def process_multiselect_column(series, get_counts=True):
         text = ' '.join(text.split())
         return text
     
-    # Normalize all valid options once
-    normalized_valid_options = {normalize_text(opt).lower(): opt for opt in valid_options}
-    
     all_options = []
     
     for value in series:
@@ -189,60 +186,37 @@ def process_multiselect_column(series, get_counts=True):
             continue
         
         value_str = str(value).strip()
+        normalized_value = normalize_text(value_str).lower()
         
-        # FIRST: Split by semicolon (primary delimiter for multi-select)
-        # DO NOT split by comma yet - commas might be inside answer options
-        parts = [p.strip() for p in value_str.split(';') if p.strip()]
+        # Try to find ALL valid options that appear in this response
+        matched_options = []
         
-        # If no semicolons, might be comma-delimited (but be careful)
-        if len(parts) == 1 and ',' in value_str:
-            # Check if this matches any complete valid option first
-            normalized_value = normalize_text(value_str).lower()
-            if normalized_value in normalized_valid_options:
-                # It's a complete match, don't split
-                parts = [value_str]
-            else:
-                # Try splitting by comma
-                parts = [p.strip() for p in value_str.split(',') if p.strip()]
-        
-        # For each part, try to match against valid options
-        for part in parts:
-            if not part:
-                continue
+        for valid_option in valid_options:
+            normalized_option = normalize_text(valid_option).lower()
             
-            normalized_part = normalize_text(part).lower()
-            
-            # Try exact match first
-            if normalized_part in normalized_valid_options:
-                matched_option = normalized_valid_options[normalized_part]
-                normalized = normalize_text(matched_option)
+            # Check if this complete valid option appears anywhere in the response
+            if normalized_option in normalized_value:
+                matched_options.append(valid_option)
+        
+        # If we found matches, use those
+        if matched_options:
+            for opt in matched_options:
+                normalized = normalize_text(opt)
                 normalized = normalized.capitalize()
                 all_options.append(normalized)
-            else:
-                # Try substring match (in case of partial text variations)
-                matched = False
-                for norm_opt, original_opt in normalized_valid_options.items():
-                    # Check if the part is very similar to a valid option
-                    # (at least 70% of words match)
-                    part_words = set(normalized_part.split())
-                    opt_words = set(norm_opt.split())
-                    
-                    if part_words and opt_words:
-                        overlap = len(part_words.intersection(opt_words))
-                        similarity = overlap / max(len(part_words), len(opt_words))
-                        
-                        if similarity >= 0.7:
-                            normalized = normalize_text(original_opt)
-                            normalized = normalized.capitalize()
-                            all_options.append(normalized)
-                            matched = True
-                            break
-                
-                # If still no match, use the part as-is (fallback)
-                if not matched:
+        else:
+            # Fallback: try splitting by semicolon (common multi-select delimiter)
+            if ';' in value_str:
+                parts = [p.strip() for p in value_str.split(';') if p.strip()]
+                for part in parts:
                     normalized = normalize_text(part)
                     normalized = normalized.capitalize()
                     all_options.append(normalized)
+            else:
+                # Last resort: use the whole value as one option
+                normalized = normalize_text(value_str)
+                normalized = normalized.capitalize()
+                all_options.append(normalized)
     
     if get_counts:
         option_counts = pd.Series(all_options).value_counts()

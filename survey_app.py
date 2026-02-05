@@ -602,6 +602,11 @@ def filter_valid_responses(series, question_text):
     
     return filtered
     
+    # Apply filter
+    filtered = series[~series.apply(is_obviously_invalid)]
+    
+    return filtered
+    
     # Build a blacklist of key phrases from OTHER questions
     def extract_key_phrases(text):
         """Extract distinctive phrases (2-4 words) from text"""

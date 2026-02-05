@@ -568,6 +568,20 @@ def filter_valid_responses(series, question_text):
         if unique_to_other:
             other_questions_key_words[other_question] = unique_to_other
     
+    def check_contamination(text):
+        """Check if a single response part is cross-contamination"""
+        text_words = extract_key_words(text)
+        
+        for other_q, other_words in other_questions_key_words.items():
+            # Count how many distinctive words from other question appear here
+            overlap = text_words.intersection(other_words)
+            
+            # If 3+ distinctive words from another question, likely contamination
+            if len(overlap) >= 3:
+                return True
+        
+        return False
+    
     def is_obviously_invalid(value):
         """Check if response is obviously invalid"""
         if pd.isna(value) or value == '':
@@ -583,19 +597,19 @@ def filter_valid_responses(series, question_text):
         if value_str.count('.') >= 3:
             return True
         
-        # Check for cross-contamination: does this response contain multiple 
-        # distinctive words from another question's responses?
-        value_words = extract_key_words(value_str)
-        
-        for other_q, other_words in other_questions_key_words.items():
-            # Count how many distinctive words from other question appear here
-            overlap = value_words.intersection(other_words)
-            
-            # If 3+ distinctive words from another question, likely contamination
-            if len(overlap) >= 3:
-                return True
-        
-        return False
+        # For multi-select, check EACH part separately
+        if ',' in value_str or ';' in value_str:
+            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
+            for part in parts:
+                if not part:
+                    continue
+                # If ANY part is contaminated, filter the whole response
+                if check_contamination(part):
+                    return True
+            return False
+        else:
+            # Single select - check the whole response
+            return check_contamination(value_str)
     
     # Apply filter
     filtered = series[~series.apply(is_obviously_invalid)]

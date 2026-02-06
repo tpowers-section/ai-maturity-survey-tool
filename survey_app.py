@@ -1524,27 +1524,86 @@ if st.session_state.combined_data is not None:
                         dd_total_respondents = len(dd_question_data)
                     
                     if len(dd_option_counts) > 0:
+                        # Build comparison data: client vs industry vs all clients
+                        def get_response_pcts(subset_df, question, q_type, label):
+                            """Get response percentages for a subset of data."""
+                            q_data = subset_df[question].dropna()
+                            q_data = filter_valid_responses(q_data, question)
+                            if q_type != 'multi-select':
+                                q_data = normalize_single_select_to_whitelist(q_data, question)
+                            q_data = normalize_yes_no_responses(q_data, question)
+                            total = len(q_data)
+                            if total == 0:
+                                return [], 0
+                            if q_type == 'multi-select':
+                                counts = process_multiselect_column(q_data, get_counts=True)
+                            else:
+                                counts = q_data.value_counts()
+                            results = []
+                            for option in dd_option_counts.index:
+                                c = counts.get(option, 0)
+                                results.append({
+                                    'Response': option,
+                                    'Percentage': (c / total * 100),
+                                    'Count': c,
+                                    'Group': label
+                                })
+                            return results, total
+                        
+                        comp_response_data = []
+                        client_results, client_n = get_response_pcts(client_df, dd_selected_question, dd_type, selected_client)
+                        comp_response_data.extend(client_results)
+                        
+                        if industry_df is not None:
+                            ind_results, ind_n = get_response_pcts(industry_df, dd_selected_question, dd_type, f"Industry: {client_industry}")
+                            comp_response_data.extend(ind_results)
+                        
+                        all_results, all_n = get_response_pcts(df, dd_selected_question, dd_type, "All Clients")
+                        comp_response_data.extend(all_results)
+                        
+                        comp_resp_df = pd.DataFrame(comp_response_data)
+                        
                         fig_overall = px.bar(
-                            x=dd_option_counts.index,
-                            y=dd_option_counts.values,
-                            labels={'x': 'Response', 'y': 'Count'},
+                            comp_resp_df,
+                            x='Response',
+                            y='Percentage',
+                            color='Group',
+                            barmode='group',
+                            text=comp_resp_df['Percentage'].apply(lambda x: f"{x:.0f}%" if x >= 3 else ""),
+                            color_discrete_sequence=['#3900FF', '#9901EB', '#00FFB7']
                         )
-                        fig_overall.update_traces(marker_color='#3900FF')
+                        fig_overall.update_traces(textposition='outside')
                         fig_overall.update_layout(
-                            showlegend=False,
                             xaxis_tickangle=-45,
-                            height=400,
+                            height=450,
+                            xaxis_title="",
+                            yaxis_title="% of Respondents",
+                            legend_title="",
                             template='plotly_white',
                             plot_bgcolor='rgba(0,0,0,0)',
-                            paper_bgcolor='rgba(0,0,0,0)'
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            yaxis=dict(range=[0, max(comp_resp_df['Percentage']) * 1.15]) if len(comp_resp_df) > 0 else {}
                         )
                         st.plotly_chart(fig_overall, use_container_width=True)
                         
-                        overall_table = pd.DataFrame({
-                            'Option': dd_option_counts.index,
-                            'Count': dd_option_counts.values,
-                            'Percentage': [f"{x:.0f}%" for x in (dd_option_counts.values / dd_total_respondents * 100)]
-                        })
+                        # Comparison table
+                        groups = [selected_client]
+                        if industry_df is not None:
+                            groups.append(f"Industry: {client_industry}")
+                        groups.append("All Clients")
+                        
+                        table_rows = []
+                        for option in dd_option_counts.index:
+                            row = {'Response': option}
+                            for group in groups:
+                                match = comp_resp_df[(comp_resp_df['Response'] == option) & (comp_resp_df['Group'] == group)]
+                                if len(match) > 0:
+                                    row[group] = f"{match['Percentage'].iloc[0]:.0f}% ({match['Count'].iloc[0]})"
+                                else:
+                                    row[group] = "-"
+                            table_rows.append(row)
+                        
+                        overall_table = pd.DataFrame(table_rows)
                         st.dataframe(overall_table, hide_index=True, use_container_width=True)
                     
                     # --- CHART 2: Breakdown by proficiency level ---

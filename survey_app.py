@@ -163,21 +163,11 @@ def process_multiselect_column(series, get_counts=True):
     question_text = series.name if hasattr(series, 'name') else None
     valid_options = valid_responses_dict.get(question_text, [])
     
-    # Normalize function
-    def normalize_text(text):
-        """Normalize text for matching"""
-        text = str(text).strip()
-        # Replace apostrophes and quotes
-        for char in ["'", "'", "'", "`", "´", "'"]:
-            text = text.replace(char, "'")
-        for char in [""", """, "«", "»", "„", "‟"]:
-            text = text.replace(char, '"')
-        # Remove invisible chars
-        for char in ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']:
-            text = text.replace(char, '')
-        # Normalize whitespace
-        text = ' '.join(text.split())
-        return text
+    # Pre-compute normalized valid options for matching
+    normalized_valid_map = {}
+    for opt in valid_options:
+        norm_opt = robust_normalize(opt).lower()
+        normalized_valid_map[norm_opt] = opt  # normalized -> canonical
     
     all_options = []
     
@@ -186,37 +176,18 @@ def process_multiselect_column(series, get_counts=True):
             continue
         
         value_str = str(value).strip()
-        normalized_value = normalize_text(value_str).lower()
+        normalized_value = robust_normalize(value_str).lower()
         
-        # Try to find ALL valid options that appear in this response
+        # Find ALL valid options that appear in this response
         matched_options = []
         
-        for valid_option in valid_options:
-            normalized_option = normalize_text(valid_option).lower()
-            
-            # Check if this complete valid option appears anywhere in the response
-            if normalized_option in normalized_value:
-                matched_options.append(valid_option)
+        for norm_opt, canonical_opt in normalized_valid_map.items():
+            if norm_opt in normalized_value:
+                matched_options.append(canonical_opt)
         
-        # If we found matches, use those
-        if matched_options:
-            for opt in matched_options:
-                normalized = normalize_text(opt)
-                normalized = normalized.capitalize()
-                all_options.append(normalized)
-        else:
-            # Fallback: try splitting by semicolon (common multi-select delimiter)
-            if ';' in value_str:
-                parts = [p.strip() for p in value_str.split(';') if p.strip()]
-                for part in parts:
-                    normalized = normalize_text(part)
-                    normalized = normalized.capitalize()
-                    all_options.append(normalized)
-            else:
-                # Last resort: use the whole value as one option
-                normalized = normalize_text(value_str)
-                normalized = normalized.capitalize()
-                all_options.append(normalized)
+        # Only count matched valid options - discard any leftover fragments
+        for opt in matched_options:
+            all_options.append(opt)
     
     if get_counts:
         option_counts = pd.Series(all_options).value_counts()
@@ -350,6 +321,7 @@ def get_valid_responses():
             'I create fresh prompts each time I use AI',
             'I maintain a library of prompts that I reuse frequently',
             "I've built custom AI tools (CustomGPTs, Copilot Agents, Google Gems, Claude Projects) for repetitive tasks",
+            "I've built custom AI tools (Google Gems, CustomGPTs, Copilot Agents) for repetitive tasks",
             "I've created workflows that connect AI with other systems (Slack, Salesforce, email) using integrations or code"
         ],
         
@@ -539,6 +511,7 @@ def get_valid_responses():
             'No sanctioned tools available',
             "Tools exist but I don't know how to access them",
             'Tools exist with clear access process',
+            'Tools exist, but I have not been given access',
             'Not sure'
         ],
         
@@ -638,6 +611,86 @@ def filter_valid_responses(series, question_text):
     
     return filtered
 
+def robust_normalize(text):
+    """Normalize text for matching - uses Unicode escapes to prevent encoding issues.
+    This is the SINGLE normalization function used everywhere."""
+    if pd.isna(text) or text == '':
+        return ''
+    
+    text = str(text).strip()
+    
+    # Replace apostrophe variations with standard apostrophe
+    # Using explicit Unicode escapes so these can NEVER be mangled by file encoding
+    apostrophe_chars = [
+        '\u2018',  # LEFT SINGLE QUOTATION MARK
+        '\u2019',  # RIGHT SINGLE QUOTATION MARK
+        '\u201A',  # SINGLE LOW-9 QUOTATION MARK
+        '\u201B',  # SINGLE HIGH-REVERSED-9 QUOTATION MARK
+        '\u0060',  # GRAVE ACCENT
+        '\u00B4',  # ACUTE ACCENT
+    ]
+    for char in apostrophe_chars:
+        text = text.replace(char, "'")
+    
+    # Replace double quote variations with standard double quote
+    quote_chars = [
+        '\u201C',  # LEFT DOUBLE QUOTATION MARK
+        '\u201D',  # RIGHT DOUBLE QUOTATION MARK
+        '\u201E',  # DOUBLE LOW-9 QUOTATION MARK
+        '\u201F',  # DOUBLE HIGH-REVERSED-9 QUOTATION MARK
+        '\u00AB',  # LEFT-POINTING DOUBLE ANGLE QUOTATION MARK
+        '\u00BB',  # RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
+    ]
+    for char in quote_chars:
+        text = text.replace(char, '"')
+    
+    # Replace dash variations with standard hyphen
+    dash_chars = [
+        '\u2013',  # EN DASH
+        '\u2014',  # EM DASH
+        '\u2012',  # FIGURE DASH
+    ]
+    for char in dash_chars:
+        text = text.replace(char, '-')
+    
+    # Remove zero-width and invisible characters
+    invisible_chars = ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']
+    for char in invisible_chars:
+        text = text.replace(char, '')
+    
+    # Normalize whitespace
+    text = ' '.join(text.split())
+    
+    return text
+
+def match_to_valid_option(response_text, valid_options):
+    """Match a normalized response to a valid option from the whitelist.
+    Returns the canonical valid option text if matched, None if not."""
+    if not response_text or not valid_options:
+        return None
+    
+    norm_response = robust_normalize(response_text).lower().strip()
+    
+    for valid_option in valid_options:
+        norm_option = robust_normalize(valid_option).lower().strip()
+        if norm_response == norm_option:
+            return valid_option
+    
+    # Fuzzy match: try prefix matching for cases like "Not sure" vs "I'm not sure"
+    # This is intentionally conservative - only match very similar strings
+    for valid_option in valid_options:
+        norm_option = robust_normalize(valid_option).lower().strip()
+        # Check if one contains the other (for short responses like "Not sure")
+        if len(norm_response) >= 4 and len(norm_option) >= 4:
+            if norm_response in norm_option or norm_option in norm_response:
+                # Only accept if the shorter string is at least 60% of the longer
+                shorter = min(len(norm_response), len(norm_option))
+                longer = max(len(norm_response), len(norm_option))
+                if shorter / longer >= 0.6:
+                    return valid_option
+    
+    return None
+
 def normalize_for_display(series):
     """Normalize responses to group similar variations together"""
     
@@ -646,24 +699,7 @@ def normalize_for_display(series):
         if pd.isna(text) or text == '':
             return ''
         
-        text = str(text).strip()
-        
-        # Replace all apostrophe/quote variations with standard ones
-        apostrophe_chars = ["'", "'", "'", "`", "´", "'"]
-        for char in apostrophe_chars:
-            text = text.replace(char, "'")
-        
-        quote_chars = [""", """, "«", "»", "„", "‟"]
-        for char in quote_chars:
-            text = text.replace(char, '"')
-        
-        # Remove zero-width and invisible characters
-        invisible_chars = ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']
-        for char in invisible_chars:
-            text = text.replace(char, '')
-        
-        # Normalize whitespace
-        text = ' '.join(text.split())
+        text = robust_normalize(text)
         
         # Standardize capitalization - capitalize first letter of each sentence
         sentences = text.split('. ')
@@ -673,6 +709,27 @@ def normalize_for_display(series):
         return text
     
     return series.apply(normalize_text)
+
+def normalize_single_select_to_whitelist(series, question_text):
+    """For single-select questions: match each response to valid whitelist options.
+    Returns series with canonical option text, filtering out non-matching responses."""
+    valid_responses_dict = get_valid_responses()
+    valid_options = valid_responses_dict.get(question_text, [])
+    
+    if not valid_options:
+        # No whitelist for this question, fall back to basic normalization
+        return normalize_for_display(series)
+    
+    def map_response(value):
+        if pd.isna(value) or str(value).strip() == '':
+            return None
+        
+        matched = match_to_valid_option(str(value).strip(), valid_options)
+        return matched  # Returns canonical text or None
+    
+    mapped = series.apply(map_response)
+    # Filter out None (unmatched responses)
+    return mapped.dropna()
 
 def normalize_yes_no_responses(series, question_text):
     """Normalize True/False responses to Yes/No for display"""
@@ -1042,16 +1099,31 @@ if st.session_state.combined_data is not None:
             
             # Apply response filtering
             question_data = filtered_df[selected_question].dropna()
+            original_count = len(question_data)
             question_data_filtered = filter_valid_responses(question_data, selected_question)
             
-            # Show how many responses were filtered out
-            filtered_count = len(question_data) - len(question_data_filtered)
+            question_data = question_data_filtered
+            
+            # Determine question type BEFORE normalization (trust the whitelist, not the data)
+            question_type_check = get_question_type(selected_question, selected_question)
+            
+            # Only normalize for single-select (multi-select is normalized during processing)
+            if question_type_check != 'multi-select':
+                # Use whitelist matching: maps responses to canonical form and drops non-matches
+                question_data = normalize_single_select_to_whitelist(question_data, selected_question)
+            
+            # Normalize True/False to Yes/No for display (for Yes/No questions only)
+            question_data = normalize_yes_no_responses(question_data, selected_question)
+            
+            # Show how many responses were filtered out (from both filter steps)
+            filtered_count = original_count - len(question_data)
             if filtered_count > 0:
                 st.warning(f"⚠️ Filtered out {filtered_count} invalid/contaminated responses")
                 
                 # DEBUG: Show what was filtered out
                 with st.expander("🔍 Debug: View filtered responses", expanded=False):
-                    filtered_out = question_data[~question_data.index.isin(question_data_filtered.index)]
+                    filtered_out = filtered_df[selected_question].dropna()
+                    filtered_out = filtered_out[~filtered_out.index.isin(question_data.index)]
                     unique_filtered = filtered_out.unique()
                     
                     st.write("**Responses that were filtered out:**")
@@ -1062,18 +1134,6 @@ if st.session_state.combined_data is not None:
                     valid_options = get_valid_responses().get(selected_question, [])
                     for opt in valid_options:
                         st.code(f"'{opt}'")
-            
-            question_data = question_data_filtered
-            
-            # Determine question type BEFORE normalization (trust the whitelist, not the data)
-            question_type_check = get_question_type(selected_question, selected_question)
-            
-            # Only normalize for single-select (multi-select is normalized during processing)
-            if question_type_check != 'multi-select':
-                question_data = normalize_for_display(question_data)
-            
-            # Normalize True/False to Yes/No for display
-            question_data = normalize_yes_no_responses(question_data, selected_question)
             
             # Display based on type
             if question_type_check == 'multi-select':

@@ -918,7 +918,7 @@ if st.session_state.combined_data is not None:
     demo_cols = get_demographic_columns(df)
     
     # Tabs for different views
-    tab0, tab1, tab2, tab3, tab4 = st.tabs(["📊 Proficiency Overview", "🔍 Question Explorer", "📈 Demographics", "📋 Raw Data", "📥 Export"])
+    tab0, tab1, tab2, tab5, tab3, tab4 = st.tabs(["📊 Proficiency Overview", "🔍 Question Explorer", "📈 Demographics", "🏢 Client Deep Dive", "📋 Raw Data", "📥 Export"])
     
     with tab0:
         st.header("Proficiency Overview")
@@ -1369,6 +1369,270 @@ if st.session_state.combined_data is not None:
                     'Percentage': [f"{x:.0f}%" for x in (proficiency_counts.values / len(demo_filtered_df) * 100)]
                 })
                 st.dataframe(proficiency_df, hide_index=True, use_container_width=True)
+    
+    with tab5:
+        st.header("Client Deep Dive")
+        st.markdown("Compare a specific client's AI proficiency and responses against benchmarks")
+        
+        # Client selector
+        all_clients = sorted(df['Client'].unique().tolist())
+        selected_client = st.selectbox(
+            "Select Client",
+            options=all_clients,
+            key='deep_dive_client'
+        )
+        
+        if selected_client:
+            client_df = df[df['Client'] == selected_client]
+            client_industry = client_df['Industry'].iloc[0] if 'Industry' in client_df.columns else None
+            industry_df = df[df['Industry'] == client_industry] if client_industry and client_industry != 'Unknown' else None
+            
+            st.info(f"📊 {selected_client}: {len(client_df)} responses | Industry: {client_industry or 'Unknown'}" +
+                    (f" ({len(industry_df)} total in industry)" if industry_df is not None else ""))
+            
+            # === PROFICIENCY COMPARISON CHART ===
+            st.divider()
+            st.subheader("Proficiency Benchmark Comparison")
+            
+            proficiency_order = ['AI Expert', 'AI Practitioner', 'AI Experimenter', 'AI Novice']
+            proficiency_colors = {
+                'AI Expert': '#3900FF',
+                'AI Practitioner': '#00FFB7',
+                'AI Experimenter': '#F2EB00',
+                'AI Novice': '#9901EB'
+            }
+            
+            if 'Proficiency' in df.columns:
+                # Calculate percentages for each group
+                def calc_proficiency_pcts(subset_df, label):
+                    total = len(subset_df)
+                    if total == 0:
+                        return []
+                    counts = subset_df['Proficiency'].value_counts()
+                    return [{'Proficiency Level': level, 
+                             'Percentage': (counts.get(level, 0) / total * 100),
+                             'Count': counts.get(level, 0),
+                             'Group': label} for level in proficiency_order]
+                
+                comparison_data = []
+                comparison_data.extend(calc_proficiency_pcts(client_df, selected_client))
+                if industry_df is not None:
+                    comparison_data.extend(calc_proficiency_pcts(industry_df, f"Industry: {client_industry}"))
+                comparison_data.extend(calc_proficiency_pcts(df, "All Clients"))
+                
+                comp_df = pd.DataFrame(comparison_data)
+                
+                if len(comp_df) > 0:
+                    fig_comp = px.bar(
+                        comp_df,
+                        x='Proficiency Level',
+                        y='Percentage',
+                        color='Group',
+                        barmode='group',
+                        text=comp_df['Percentage'].apply(lambda x: f"{x:.0f}%"),
+                        color_discrete_sequence=['#3900FF', '#9901EB', '#00FFB7'],
+                        category_orders={'Proficiency Level': proficiency_order}
+                    )
+                    fig_comp.update_traces(textposition='outside')
+                    fig_comp.update_layout(
+                        height=450,
+                        xaxis_title="",
+                        yaxis_title="Percentage of Respondents",
+                        legend_title="",
+                        template='plotly_white',
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        yaxis=dict(range=[0, max(comp_df['Percentage']) * 1.15])
+                    )
+                    st.plotly_chart(fig_comp, use_container_width=True)
+                    
+                    # Comparison table
+                    with st.expander("View comparison data"):
+                        # Build groups for table
+                        groups = [selected_client]
+                        if industry_df is not None:
+                            groups.append(f"Industry: {client_industry}")
+                        groups.append("All Clients")
+                        
+                        table_data = {}
+                        for level in proficiency_order:
+                            row = {}
+                            for group in groups:
+                                match = comp_df[(comp_df['Proficiency Level'] == level) & (comp_df['Group'] == group)]
+                                if len(match) > 0:
+                                    row[group] = f"{match['Percentage'].iloc[0]:.0f}% ({match['Count'].iloc[0]})"
+                                else:
+                                    row[group] = "0% (0)"
+                            table_data[level] = row
+                        
+                        table_df = pd.DataFrame(table_data).T
+                        table_df.index.name = 'Proficiency Level'
+                        st.dataframe(table_df, use_container_width=True)
+            
+            # === QUESTION ANALYSIS ===
+            st.divider()
+            st.subheader("Question Analysis")
+            
+            dd_category = st.radio(
+                "Question Category",
+                options=["📊 Scored Questions", "🏢 Organizational Readiness"],
+                horizontal=True,
+                key='dd_question_category'
+            )
+            
+            dd_question_type = 'scored' if '📊' in dd_category else 'org'
+            dd_question_cols = get_question_columns(df, question_type=dd_question_type)
+            
+            dd_selected_question = st.selectbox(
+                "Select Question",
+                options=dd_question_cols,
+                key='dd_question_select'
+            )
+            
+            if dd_selected_question and len(client_df) > 0:
+                # Process question data for this client
+                dd_question_data = client_df[dd_selected_question].dropna()
+                dd_original_count = len(dd_question_data)
+                dd_question_data = filter_valid_responses(dd_question_data, dd_selected_question)
+                
+                dd_type = get_question_type(dd_selected_question, dd_selected_question)
+                
+                if dd_type != 'multi-select':
+                    dd_question_data = normalize_single_select_to_whitelist(dd_question_data, dd_selected_question)
+                dd_question_data = normalize_yes_no_responses(dd_question_data, dd_selected_question)
+                
+                dd_filtered_count = dd_original_count - len(dd_question_data)
+                if dd_filtered_count > 0:
+                    st.caption(f"⚠️ Filtered out {dd_filtered_count} invalid responses")
+                
+                if len(dd_question_data) == 0:
+                    st.warning("No valid responses for this question from this client.")
+                elif dd_type == 'free-response':
+                    st.caption("Free response question — showing sample responses")
+                    for idx, response in enumerate(dd_question_data.head(10), 1):
+                        with st.expander(f"Response {idx}"):
+                            st.write(response)
+                else:
+                    # --- CHART 1: Overall response breakdown ---
+                    st.markdown("#### Response Breakdown")
+                    
+                    if dd_type == 'multi-select':
+                        dd_option_counts = process_multiselect_column(dd_question_data, get_counts=True)
+                        dd_total_respondents = len(dd_question_data)
+                    else:
+                        dd_option_counts = dd_question_data.value_counts()
+                        dd_total_respondents = len(dd_question_data)
+                    
+                    if len(dd_option_counts) > 0:
+                        fig_overall = px.bar(
+                            x=dd_option_counts.index,
+                            y=dd_option_counts.values,
+                            labels={'x': 'Response', 'y': 'Count'},
+                        )
+                        fig_overall.update_traces(marker_color='#3900FF')
+                        fig_overall.update_layout(
+                            showlegend=False,
+                            xaxis_tickangle=-45,
+                            height=400,
+                            template='plotly_white',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            paper_bgcolor='rgba(0,0,0,0)'
+                        )
+                        st.plotly_chart(fig_overall, use_container_width=True)
+                        
+                        overall_table = pd.DataFrame({
+                            'Option': dd_option_counts.index,
+                            'Count': dd_option_counts.values,
+                            'Percentage': [f"{x:.0f}%" for x in (dd_option_counts.values / dd_total_respondents * 100)]
+                        })
+                        st.dataframe(overall_table, hide_index=True, use_container_width=True)
+                    
+                    # --- CHART 2: Breakdown by proficiency level ---
+                    st.markdown("#### Responses by Proficiency Level")
+                    
+                    if 'Proficiency' in client_df.columns:
+                        # Get all valid response options (in display order from chart 1)
+                        response_options = list(dd_option_counts.index) if len(dd_option_counts) > 0 else []
+                        
+                        # Build data: for each proficiency level, what % selected each response
+                        prof_breakdown_data = []
+                        
+                        for level in proficiency_order:
+                            level_df = client_df[client_df['Proficiency'] == level]
+                            if len(level_df) == 0:
+                                continue
+                            
+                            level_q = level_df[dd_selected_question].dropna()
+                            level_q = filter_valid_responses(level_q, dd_selected_question)
+                            
+                            if dd_type != 'multi-select':
+                                level_q = normalize_single_select_to_whitelist(level_q, dd_selected_question)
+                            level_q = normalize_yes_no_responses(level_q, dd_selected_question)
+                            
+                            level_total = len(level_q)
+                            if level_total == 0:
+                                continue
+                            
+                            if dd_type == 'multi-select':
+                                level_counts = process_multiselect_column(level_q, get_counts=True)
+                            else:
+                                level_counts = level_q.value_counts()
+                            
+                            for option in response_options:
+                                count = level_counts.get(option, 0)
+                                pct = (count / level_total * 100) if level_total > 0 else 0
+                                prof_breakdown_data.append({
+                                    'Response': option,
+                                    'Proficiency Level': level,
+                                    'Percentage': pct,
+                                    'Count': count,
+                                    'Level Total': level_total
+                                })
+                        
+                        if prof_breakdown_data:
+                            prof_df = pd.DataFrame(prof_breakdown_data)
+                            
+                            fig_prof = px.bar(
+                                prof_df,
+                                x='Response',
+                                y='Percentage',
+                                color='Proficiency Level',
+                                barmode='group',
+                                text=prof_df['Percentage'].apply(lambda x: f"{x:.0f}%" if x >= 5 else ""),
+                                color_discrete_map=proficiency_colors,
+                                category_orders={'Proficiency Level': proficiency_order}
+                            )
+                            fig_prof.update_traces(textposition='outside')
+                            fig_prof.update_layout(
+                                height=500,
+                                xaxis_title="",
+                                yaxis_title="% of Proficiency Level",
+                                legend_title="",
+                                template='plotly_white',
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                xaxis_tickangle=-45
+                            )
+                            st.plotly_chart(fig_prof, use_container_width=True)
+                            
+                            # Pivot table for readability
+                            pivot_data = []
+                            for option in response_options:
+                                row = {'Response': option}
+                                for level in proficiency_order:
+                                    match = prof_df[(prof_df['Response'] == option) & (prof_df['Proficiency Level'] == level)]
+                                    if len(match) > 0:
+                                        row[level] = f"{match['Percentage'].iloc[0]:.0f}% ({match['Count'].iloc[0]})"
+                                    else:
+                                        row[level] = "-"
+                                pivot_data.append(row)
+                            
+                            pivot_table = pd.DataFrame(pivot_data)
+                            st.dataframe(pivot_table, hide_index=True, use_container_width=True)
+                        else:
+                            st.warning("No proficiency data available for this question.")
+                    else:
+                        st.warning("No proficiency data available.")
     
     with tab3:
         st.header("Raw Data View")

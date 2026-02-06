@@ -63,6 +63,55 @@ def handle_filter_change(key, all_label):
     # Store current as previous for next change
     st.session_state[prev_key] = list(st.session_state.get(key, [all_label]))
 
+def get_cascading_options(df, client_key, industry_key):
+    """Compute available client and industry options based on each other's selection.
+    Returns (client_options, industry_options, valid_clients, valid_industries)."""
+    
+    # Read current selections from session state
+    selected_clients = st.session_state.get(client_key, ['All Clients'])
+    selected_industries = st.session_state.get(industry_key, ['All'])
+    
+    all_clients = sorted(df['Client'].unique().tolist())
+    all_industries = sorted([str(v) for v in df['Industry'].dropna().unique() if str(v) != 'Unknown'])
+    if 'Unknown' in df['Industry'].dropna().unique().tolist():
+        all_industries.append('Unknown')
+    
+    # Compute available industries based on client selection
+    if 'All Clients' not in selected_clients and selected_clients:
+        client_filtered = df[df['Client'].isin(selected_clients)]
+        available_industries = sorted([str(v) for v in client_filtered['Industry'].dropna().unique() if str(v) != 'Unknown'])
+        if 'Unknown' in client_filtered['Industry'].dropna().unique().tolist():
+            available_industries.append('Unknown')
+    else:
+        available_industries = all_industries
+    
+    # Compute available clients based on industry selection
+    if 'All' not in selected_industries and selected_industries:
+        industry_filtered = df[df['Industry'].isin(selected_industries)]
+        available_clients = sorted(industry_filtered['Client'].unique().tolist())
+    else:
+        available_clients = all_clients
+    
+    # Clean up stale selections (remove values no longer available)
+    valid_clients = [c for c in selected_clients if c == 'All Clients' or c in available_clients]
+    if not valid_clients:
+        valid_clients = ['All Clients']
+    
+    valid_industries = [i for i in selected_industries if i == 'All' or i in available_industries]
+    if not valid_industries:
+        valid_industries = ['All']
+    
+    # Update session state if we cleaned up stale values
+    if valid_clients != selected_clients:
+        st.session_state[client_key] = valid_clients
+    if valid_industries != selected_industries:
+        st.session_state[industry_key] = valid_industries
+    
+    client_options = ['All Clients'] + available_clients
+    industry_options = ['All'] + available_industries
+    
+    return client_options, industry_options, valid_clients, valid_industries
+
 def clean_excel_data(df, client_name):
     """Clean and process Excel data from Raw Data sheet"""
     # Raw Data sheet has headers in row 2 (index 1), data starts in row 3 (index 2)
@@ -878,12 +927,22 @@ if st.session_state.combined_data is not None:
         # Filters
         col1, col2 = st.columns(2)
         
+        if 'Industry' in df.columns:
+            client_options, industry_options, valid_clients, valid_industries = get_cascading_options(
+                df, 'overview_client_filter', 'overview_industry_filter'
+            )
+        else:
+            client_options = ['All Clients'] + sorted(df['Client'].unique().tolist())
+            valid_clients = st.session_state.get('overview_client_filter', ['All Clients'])
+            industry_options = None
+            valid_industries = ['All']
+        
         with col1:
             # Client filter
             overview_clients = st.multiselect(
                 "Filter by Client",
-                options=['All Clients'] + sorted(df['Client'].unique().tolist()),
-                default=['All Clients'],
+                options=client_options,
+                default=valid_clients,
                 key='overview_client_filter',
                 on_change=handle_filter_change,
                 args=('overview_client_filter', 'All Clients')
@@ -891,16 +950,12 @@ if st.session_state.combined_data is not None:
         
         with col2:
             # Industry filter
+            overview_industries = ['All']  # default if no Industry column
             if 'Industry' in df.columns:
-                unique_industries = df['Industry'].dropna().unique()
-                industry_options_overview = ['All'] + sorted([str(v) for v in unique_industries if str(v) != 'Unknown'])
-                if 'Unknown' in unique_industries:
-                    industry_options_overview.append('Unknown')
-                
                 overview_industries = st.multiselect(
                     "Filter by Industry",
-                    options=industry_options_overview,
-                    default=['All'],
+                    options=industry_options,
+                    default=valid_industries,
                     key='overview_industry_filter',
                     on_change=handle_filter_change,
                     args=('overview_industry_filter', 'All')
@@ -912,7 +967,7 @@ if st.session_state.combined_data is not None:
         if 'All Clients' not in overview_clients and overview_clients:
             overview_df = overview_df[overview_df['Client'].isin(overview_clients)]
         
-        if 'All' not in overview_industries and overview_industries:
+        if 'Industry' in df.columns and 'All' not in overview_industries and overview_industries:
             overview_df = overview_df[overview_df['Industry'].isin(overview_industries)]
         
         # Show summary
@@ -1057,12 +1112,19 @@ if st.session_state.combined_data is not None:
             )
         
         with col2:
-            # Client filter
-            clients = ['All Clients'] + sorted(df['Client'].unique().tolist())
+            # Client filter - compute cascading options first
+            if 'Industry' in df.columns:
+                explorer_client_options, explorer_industry_options, explorer_valid_clients, explorer_valid_industries = get_cascading_options(
+                    df, 'explorer_client_filter', 'filter_industry'
+                )
+            else:
+                explorer_client_options = ['All Clients'] + sorted(df['Client'].unique().tolist())
+                explorer_valid_clients = st.session_state.get('explorer_client_filter', ['All Clients'])
+            
             selected_clients = st.multiselect(
                 "Filter by Client",
-                options=clients,
-                default=['All Clients'],
+                options=explorer_client_options,
+                default=explorer_valid_clients,
                 key='explorer_client_filter',
                 on_change=handle_filter_change,
                 args=('explorer_client_filter', 'All Clients')
@@ -1078,15 +1140,10 @@ if st.session_state.combined_data is not None:
         with filter_col1:
             # Industry filter
             if 'Industry' in df.columns:
-                unique_industries = df['Industry'].dropna().unique()
-                industry_options = ['All'] + sorted([str(v) for v in unique_industries if str(v) != 'Unknown'])
-                if 'Unknown' in unique_industries:
-                    industry_options.append('Unknown')
-                
                 selected_industries = st.multiselect(
                     "Industry",
-                    options=industry_options,
-                    default=['All'],
+                    options=explorer_industry_options,
+                    default=explorer_valid_industries,
                     key="filter_industry",
                     on_change=handle_filter_change,
                     args=('filter_industry', 'All')

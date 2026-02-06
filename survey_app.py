@@ -43,6 +43,26 @@ if 'unmapped_clients' not in st.session_state:
 if 'load_errors' not in st.session_state:
     st.session_state.load_errors = []
 
+def handle_filter_change(key, all_label):
+    """Auto-deselect 'All' when specific items are chosen, and vice versa."""
+    current = st.session_state.get(key, [])
+    prev_key = f"_prev_{key}"
+    prev = st.session_state.get(prev_key, [all_label])
+    
+    if not current:
+        # Nothing selected - default back to All
+        st.session_state[key] = [all_label]
+    elif all_label in current and len(current) > 1:
+        if all_label not in prev:
+            # User just added "All" - clear specific items
+            st.session_state[key] = [all_label]
+        else:
+            # User just added a specific item - remove "All"
+            st.session_state[key] = [x for x in current if x != all_label]
+    
+    # Store current as previous for next change
+    st.session_state[prev_key] = list(st.session_state.get(key, [all_label]))
+
 def clean_excel_data(df, client_name):
     """Clean and process Excel data from Raw Data sheet"""
     # Raw Data sheet has headers in row 2 (index 1), data starts in row 3 (index 2)
@@ -218,11 +238,14 @@ def create_bar_chart(data, title, xaxis_title, yaxis_title):
         title=title,
         labels={'x': xaxis_title, 'y': yaxis_title}
     )
+    fig.update_traces(marker_color='#3900FF')
     fig.update_layout(
         showlegend=False,
         xaxis_tickangle=-45,
         height=400,
-        template='plotly_white'
+        template='plotly_white',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
     )
     return fig
 
@@ -861,7 +884,9 @@ if st.session_state.combined_data is not None:
                 "Filter by Client",
                 options=['All Clients'] + sorted(df['Client'].unique().tolist()),
                 default=['All Clients'],
-                key='overview_client_filter'
+                key='overview_client_filter',
+                on_change=handle_filter_change,
+                args=('overview_client_filter', 'All Clients')
             )
         
         with col2:
@@ -876,7 +901,9 @@ if st.session_state.combined_data is not None:
                     "Filter by Industry",
                     options=industry_options_overview,
                     default=['All'],
-                    key='overview_industry_filter'
+                    key='overview_industry_filter',
+                    on_change=handle_filter_change,
+                    args=('overview_industry_filter', 'All')
                 )
         
         # Apply filters
@@ -912,7 +939,7 @@ if st.session_state.combined_data is not None:
                 with metric_cols[idx]:
                     st.metric(
                         label=level,
-                        value=f"{percentage:.1f}%",
+                        value=f"{percentage:.0f}%",
                         delta=f"{count} responses"
                     )
             
@@ -943,10 +970,10 @@ if st.session_state.combined_data is not None:
                         text='Count',
                         color='Proficiency Level',
                         color_discrete_map={
-                            'AI Expert': '#1f77b4',
-                            'AI Practitioner': '#2ca02c',
-                            'AI Experimenter': '#ff7f0e',
-                            'AI Novice': '#d62728'
+                            'AI Expert': '#3900FF',
+                            'AI Practitioner': '#00FFB7',
+                            'AI Experimenter': '#F2EB00',
+                            'AI Novice': '#9901EB'
                         }
                     )
                     fig_count.update_traces(textposition='outside')
@@ -954,7 +981,9 @@ if st.session_state.combined_data is not None:
                         showlegend=False,
                         xaxis_title="",
                         yaxis_title="Number of Responses",
-                        height=400
+                        height=400,
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)'
                     )
                     st.plotly_chart(fig_count, use_container_width=True)
                 
@@ -966,19 +995,23 @@ if st.session_state.combined_data is not None:
                         names='Proficiency Level',
                         color='Proficiency Level',
                         color_discrete_map={
-                            'AI Expert': '#1f77b4',
-                            'AI Practitioner': '#2ca02c',
-                            'AI Experimenter': '#ff7f0e',
-                            'AI Novice': '#d62728'
+                            'AI Expert': '#3900FF',
+                            'AI Practitioner': '#00FFB7',
+                            'AI Experimenter': '#F2EB00',
+                            'AI Novice': '#9901EB'
                         }
                     )
                     fig_pie.update_traces(
                         textposition='inside',
                         textinfo='percent+label',
-                        hovertemplate='<b>%{label}</b><br>%{value:.1f}%<br>%{customdata[0]} responses<extra></extra>',
+                        hovertemplate='<b>%{label}</b><br>%{value:.0f}%<br>%{customdata[0]} responses<extra></extra>',
                         customdata=viz_df[['Count']].values
                     )
-                    fig_pie.update_layout(height=400)
+                    fig_pie.update_layout(
+                        height=400,
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)'
+                    )
                     st.plotly_chart(fig_pie, use_container_width=True)
                 
                 # Detailed table
@@ -988,7 +1021,7 @@ if st.session_state.combined_data is not None:
                 detail_df = pd.DataFrame({
                     'Proficiency Level': viz_df['Proficiency Level'],
                     'Count': viz_df['Count'],
-                    'Percentage': viz_df['Percentage'].apply(lambda x: f"{x:.1f}%")
+                    'Percentage': viz_df['Percentage'].apply(lambda x: f"{x:.0f}%")
                 })
                 
                 st.dataframe(detail_df, hide_index=True, use_container_width=True)
@@ -1029,7 +1062,10 @@ if st.session_state.combined_data is not None:
             selected_clients = st.multiselect(
                 "Filter by Client",
                 options=clients,
-                default=['All Clients']
+                default=['All Clients'],
+                key='explorer_client_filter',
+                on_change=handle_filter_change,
+                args=('explorer_client_filter', 'All Clients')
             )
         
         # Filters section
@@ -1051,7 +1087,9 @@ if st.session_state.combined_data is not None:
                     "Industry",
                     options=industry_options,
                     default=['All'],
-                    key="filter_industry"
+                    key="filter_industry",
+                    on_change=handle_filter_change,
+                    args=('filter_industry', 'All')
                 )
                 if 'All' not in selected_industries:
                     active_filters['Industry'] = selected_industries
@@ -1073,7 +1111,9 @@ if st.session_state.combined_data is not None:
                     "AI Proficiency Level",
                     options=proficiency_options,
                     default=['All'],
-                    key="filter_proficiency"
+                    key="filter_proficiency",
+                    on_change=handle_filter_change,
+                    args=('filter_proficiency', 'All')
                 )
                 if 'All' not in selected_proficiencies:
                     active_filters['Proficiency'] = selected_proficiencies
@@ -1156,7 +1196,7 @@ if st.session_state.combined_data is not None:
                 result_df = pd.DataFrame({
                     'Option': option_counts.index,
                     'Count': option_counts.values,
-                    'Percentage': (option_counts.values / len(question_data) * 100).round(1)
+                    'Percentage': [f"{x:.0f}%" for x in (option_counts.values / len(question_data) * 100)]
                 })
                 st.dataframe(result_df, hide_index=True, use_container_width=True)
             
@@ -1202,7 +1242,7 @@ if st.session_state.combined_data is not None:
                 result_df = pd.DataFrame({
                     'Option': value_counts.index,
                     'Count': value_counts.values,
-                    'Percentage': (value_counts.values / len(question_data) * 100).round(1)
+                    'Percentage': [f"{x:.0f}%" for x in (value_counts.values / len(question_data) * 100)]
                 })
                 st.dataframe(result_df, hide_index=True, use_container_width=True)
     
@@ -1215,7 +1255,9 @@ if st.session_state.combined_data is not None:
             "Filter by Client",
             options=['All Clients'] + sorted(df['Client'].unique().tolist()),
             default=['All Clients'],
-            key='demo_client_filter'
+            key='demo_client_filter',
+            on_change=handle_filter_change,
+            args=('demo_client_filter', 'All Clients')
         )
         
         demo_filtered_df = df.copy()
@@ -1245,7 +1287,7 @@ if st.session_state.combined_data is not None:
                 industry_df = pd.DataFrame({
                     'Industry': industry_counts.index,
                     'Count': industry_counts.values,
-                    'Percentage': (industry_counts.values / len(demo_filtered_df) * 100).round(1)
+                    'Percentage': [f"{x:.0f}%" for x in (industry_counts.values / len(demo_filtered_df) * 100)]
                 })
                 st.dataframe(industry_df, hide_index=True, use_container_width=True)
         
@@ -1267,7 +1309,7 @@ if st.session_state.combined_data is not None:
                 proficiency_df = pd.DataFrame({
                     'Proficiency': proficiency_counts.index,
                     'Count': proficiency_counts.values,
-                    'Percentage': (proficiency_counts.values / len(demo_filtered_df) * 100).round(1)
+                    'Percentage': [f"{x:.0f}%" for x in (proficiency_counts.values / len(demo_filtered_df) * 100)]
                 })
                 st.dataframe(proficiency_df, hide_index=True, use_container_width=True)
     

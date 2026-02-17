@@ -43,6 +43,75 @@ if 'unmapped_clients' not in st.session_state:
 if 'load_errors' not in st.session_state:
     st.session_state.load_errors = []
 
+def handle_filter_change(key, all_label):
+    """Auto-deselect 'All' when specific items are chosen, and vice versa."""
+    current = st.session_state.get(key, [])
+    prev_key = f"_prev_{key}"
+    prev = st.session_state.get(prev_key, [all_label])
+    
+    if not current:
+        # Nothing selected - default back to All
+        st.session_state[key] = [all_label]
+    elif all_label in current and len(current) > 1:
+        if all_label not in prev:
+            # User just added "All" - clear specific items
+            st.session_state[key] = [all_label]
+        else:
+            # User just added a specific item - remove "All"
+            st.session_state[key] = [x for x in current if x != all_label]
+    
+    # Store current as previous for next change
+    st.session_state[prev_key] = list(st.session_state.get(key, [all_label]))
+
+def get_cascading_options(df, client_key, industry_key):
+    """Compute available client and industry options based on each other's selection.
+    Returns (client_options, industry_options, valid_clients, valid_industries)."""
+    
+    # Read current selections from session state
+    selected_clients = st.session_state.get(client_key, ['All Clients'])
+    selected_industries = st.session_state.get(industry_key, ['All'])
+    
+    all_clients = sorted(df['Client'].unique().tolist())
+    all_industries = sorted([str(v) for v in df['Industry'].dropna().unique() if str(v) != 'Unknown'])
+    if 'Unknown' in df['Industry'].dropna().unique().tolist():
+        all_industries.append('Unknown')
+    
+    # Compute available industries based on client selection
+    if 'All Clients' not in selected_clients and selected_clients:
+        client_filtered = df[df['Client'].isin(selected_clients)]
+        available_industries = sorted([str(v) for v in client_filtered['Industry'].dropna().unique() if str(v) != 'Unknown'])
+        if 'Unknown' in client_filtered['Industry'].dropna().unique().tolist():
+            available_industries.append('Unknown')
+    else:
+        available_industries = all_industries
+    
+    # Compute available clients based on industry selection
+    if 'All' not in selected_industries and selected_industries:
+        industry_filtered = df[df['Industry'].isin(selected_industries)]
+        available_clients = sorted(industry_filtered['Client'].unique().tolist())
+    else:
+        available_clients = all_clients
+    
+    # Clean up stale selections (remove values no longer available)
+    valid_clients = [c for c in selected_clients if c == 'All Clients' or c in available_clients]
+    if not valid_clients:
+        valid_clients = ['All Clients']
+    
+    valid_industries = [i for i in selected_industries if i == 'All' or i in available_industries]
+    if not valid_industries:
+        valid_industries = ['All']
+    
+    # Update session state if we cleaned up stale values
+    if valid_clients != selected_clients:
+        st.session_state[client_key] = valid_clients
+    if valid_industries != selected_industries:
+        st.session_state[industry_key] = valid_industries
+    
+    client_options = ['All Clients'] + available_clients
+    industry_options = ['All'] + available_industries
+    
+    return client_options, industry_options, valid_clients, valid_industries
+
 def clean_excel_data(df, client_name):
     """Clean and process Excel data from Raw Data sheet"""
     # Raw Data sheet has headers in row 2 (index 1), data starts in row 3 (index 2)
@@ -163,21 +232,11 @@ def process_multiselect_column(series, get_counts=True):
     question_text = series.name if hasattr(series, 'name') else None
     valid_options = valid_responses_dict.get(question_text, [])
     
-    # Normalize function
-    def normalize_text(text):
-        """Normalize text for matching"""
-        text = str(text).strip()
-        # Replace apostrophes and quotes
-        for char in ["'", "'", "'", "`", "´", "'"]:
-            text = text.replace(char, "'")
-        for char in [""", """, "«", "»", "„", "‟"]:
-            text = text.replace(char, '"')
-        # Remove invisible chars
-        for char in ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']:
-            text = text.replace(char, '')
-        # Normalize whitespace
-        text = ' '.join(text.split())
-        return text
+    # Pre-compute normalized valid options for matching
+    normalized_valid_map = {}
+    for opt in valid_options:
+        norm_opt = robust_normalize(opt).lower()
+        normalized_valid_map[norm_opt] = opt  # normalized -> canonical
     
     all_options = []
     
@@ -186,37 +245,18 @@ def process_multiselect_column(series, get_counts=True):
             continue
         
         value_str = str(value).strip()
-        normalized_value = normalize_text(value_str).lower()
+        normalized_value = robust_normalize(value_str).lower()
         
-        # Try to find ALL valid options that appear in this response
+        # Find ALL valid options that appear in this response
         matched_options = []
         
-        for valid_option in valid_options:
-            normalized_option = normalize_text(valid_option).lower()
-            
-            # Check if this complete valid option appears anywhere in the response
-            if normalized_option in normalized_value:
-                matched_options.append(valid_option)
+        for norm_opt, canonical_opt in normalized_valid_map.items():
+            if norm_opt in normalized_value:
+                matched_options.append(canonical_opt)
         
-        # If we found matches, use those
-        if matched_options:
-            for opt in matched_options:
-                normalized = normalize_text(opt)
-                normalized = normalized.capitalize()
-                all_options.append(normalized)
-        else:
-            # Fallback: try splitting by semicolon (common multi-select delimiter)
-            if ';' in value_str:
-                parts = [p.strip() for p in value_str.split(';') if p.strip()]
-                for part in parts:
-                    normalized = normalize_text(part)
-                    normalized = normalized.capitalize()
-                    all_options.append(normalized)
-            else:
-                # Last resort: use the whole value as one option
-                normalized = normalize_text(value_str)
-                normalized = normalized.capitalize()
-                all_options.append(normalized)
+        # Only count matched valid options - discard any leftover fragments
+        for opt in matched_options:
+            all_options.append(opt)
     
     if get_counts:
         option_counts = pd.Series(all_options).value_counts()
@@ -247,11 +287,14 @@ def create_bar_chart(data, title, xaxis_title, yaxis_title):
         title=title,
         labels={'x': xaxis_title, 'y': yaxis_title}
     )
+    fig.update_traces(marker_color='#3900FF')
     fig.update_layout(
         showlegend=False,
         xaxis_tickangle=-45,
         height=400,
-        template='plotly_white'
+        template='plotly_white',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
     )
     return fig
 
@@ -350,6 +393,7 @@ def get_valid_responses():
             'I create fresh prompts each time I use AI',
             'I maintain a library of prompts that I reuse frequently',
             "I've built custom AI tools (CustomGPTs, Copilot Agents, Google Gems, Claude Projects) for repetitive tasks",
+            "I've built custom AI tools (Google Gems, CustomGPTs, Copilot Agents) for repetitive tasks",
             "I've created workflows that connect AI with other systems (Slack, Salesforce, email) using integrations or code"
         ],
         
@@ -539,6 +583,7 @@ def get_valid_responses():
             'No sanctioned tools available',
             "Tools exist but I don't know how to access them",
             'Tools exist with clear access process',
+            'Tools exist, but I have not been given access',
             'Not sure'
         ],
         
@@ -637,269 +682,86 @@ def filter_valid_responses(series, question_text):
     filtered = series[~series.apply(is_obviously_invalid)]
     
     return filtered
+
+def robust_normalize(text):
+    """Normalize text for matching - uses Unicode escapes to prevent encoding issues.
+    This is the SINGLE normalization function used everywhere."""
+    if pd.isna(text) or text == '':
+        return ''
     
-    # Build a blacklist of key phrases from OTHER questions
-    def extract_key_phrases(text):
-        """Extract distinctive phrases (2-4 words) from text"""
-        text = text.lower()
-        words = text.split()
-        phrases = []
-        
-        # 2-word phrases
-        for i in range(len(words) - 1):
-            phrases.append(f"{words[i]} {words[i+1]}")
-        
-        # 3-word phrases
-        for i in range(len(words) - 2):
-            phrases.append(f"{words[i]} {words[i+1]} {words[i+2]}")
-        
-        return phrases
+    text = str(text).strip()
     
-    # Build blacklist from all OTHER questions
-    blacklist_phrases = set()
-    for other_question, other_options in valid_responses_dict.items():
-        if other_question == question_text:
-            continue  # Skip current question
-        
-        for option in other_options:
-            phrases = extract_key_phrases(option)
-            blacklist_phrases.update(phrases)
+    # Replace apostrophe variations with standard apostrophe
+    # Using explicit Unicode escapes so these can NEVER be mangled by file encoding
+    apostrophe_chars = [
+        '\u2018',  # LEFT SINGLE QUOTATION MARK
+        '\u2019',  # RIGHT SINGLE QUOTATION MARK
+        '\u201A',  # SINGLE LOW-9 QUOTATION MARK
+        '\u201B',  # SINGLE HIGH-REVERSED-9 QUOTATION MARK
+        '\u0060',  # GRAVE ACCENT
+        '\u00B4',  # ACUTE ACCENT
+    ]
+    for char in apostrophe_chars:
+        text = text.replace(char, "'")
     
-    # Remove phrases that also appear in THIS question's valid responses
-    # (to avoid false positives)
-    current_phrases = set()
-    for option in valid_options:
-        phrases = extract_key_phrases(option)
-        current_phrases.update(phrases)
+    # Replace double quote variations with standard double quote
+    quote_chars = [
+        '\u201C',  # LEFT DOUBLE QUOTATION MARK
+        '\u201D',  # RIGHT DOUBLE QUOTATION MARK
+        '\u201E',  # DOUBLE LOW-9 QUOTATION MARK
+        '\u201F',  # DOUBLE HIGH-REVERSED-9 QUOTATION MARK
+        '\u00AB',  # LEFT-POINTING DOUBLE ANGLE QUOTATION MARK
+        '\u00BB',  # RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
+    ]
+    for char in quote_chars:
+        text = text.replace(char, '"')
     
-    # Final blacklist = phrases in other questions but NOT in current question
-    blacklist_phrases = blacklist_phrases - current_phrases
+    # Replace dash variations with standard hyphen
+    dash_chars = [
+        '\u2013',  # EN DASH
+        '\u2014',  # EM DASH
+        '\u2012',  # FIGURE DASH
+    ]
+    for char in dash_chars:
+        text = text.replace(char, '-')
     
-    # Filter function
-    def is_valid(value):
-        if pd.isna(value) or value == '':
-            return False
-        
-        value_str = str(value).strip()
-        
-        # Filter obviously invalid
-        if len(value_str) > 200 or value_str.count('.') >= 3:
-            return False
-        
-        # Normalize the value
-        value_lower = value_str.lower()
-        
-        # For multi-select, check each part
-        if ',' in value_str or ';' in value_str:
-            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
-            for part in parts:
-                if not part:
-                    continue
-                
-                part_lower = part.lower()
-                
-                # Check if this part contains blacklisted phrases
-                for phrase in blacklist_phrases:
-                    if phrase in part_lower:
-                        # This part likely belongs to another question
-                        return False
-            
-            return True
-        else:
-            # Single select - check if it contains blacklisted phrases
-            for phrase in blacklist_phrases:
-                if phrase in value_lower:
-                    # This response likely belongs to another question
-                    return False
-            
-            return True
+    # Remove zero-width and invisible characters
+    invisible_chars = ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']
+    for char in invisible_chars:
+        text = text.replace(char, '')
     
-    # Apply filter
-    filtered = series[series.apply(is_valid)]
+    # Normalize whitespace
+    text = ' '.join(text.split())
     
-    return filtered
+    return text
+
+def match_to_valid_option(response_text, valid_options):
+    """Match a normalized response to a valid option from the whitelist.
+    Returns the canonical valid option text if matched, None if not."""
+    if not response_text or not valid_options:
+        return None
     
-    # Normalize function for comparison
-    def normalize_for_matching(text):
-        """Normalize text for fuzzy matching"""
-        text = str(text).strip().lower()
-        # Replace apostrophes and quotes
-        for char in ["'", "'", "'", "`", "´", "'"]:
-            text = text.replace(char, "'")
-        for char in [""", """, "«", "»", "„", "‟"]:
-            text = text.replace(char, '"')
-        # Remove invisible chars
-        for char in ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']:
-            text = text.replace(char, '')
-        # Normalize whitespace
-        text = ' '.join(text.split())
-        return text
+    norm_response = robust_normalize(response_text).lower().strip()
     
-    # Create normalized valid options
-    normalized_valid = [normalize_for_matching(opt) for opt in valid_options]
+    for valid_option in valid_options:
+        norm_option = robust_normalize(valid_option).lower().strip()
+        if norm_response == norm_option:
+            return valid_option
     
-    # Check if key words from valid option appear in response
-    def has_key_words(response, valid_option):
-        """Check if response contains key words from valid option"""
-        # Extract meaningful words (>3 chars, not common words)
-        common_words = {'the', 'and', 'for', 'with', 'that', 'this', 'from', 'are', 'but', 'not', 'you', 'all', 'can', 'have', 'has', 'had', 'our', 'their'}
-        
-        valid_words = [w for w in valid_option.split() if len(w) > 3 and w not in common_words]
-        response_words = set(response.split())
-        
-        if not valid_words:
-            return False
-        
-        # Count how many key words match
-        matches = sum(1 for word in valid_words if word in response_words)
-        
-        # Need at least 40% of key words to match
-        return (matches / len(valid_words)) >= 0.4
+    # Fuzzy match: try prefix matching for cases like "Not sure" vs "I'm not sure"
+    # This is intentionally conservative - only match very similar strings
+    for valid_option in valid_options:
+        norm_option = robust_normalize(valid_option).lower().strip()
+        # Check if one contains the other (for short responses like "Not sure")
+        if len(norm_response) >= 4 and len(norm_option) >= 4:
+            if norm_response in norm_option or norm_option in norm_response:
+                # Only accept if the shorter string is at least 60% of the longer
+                shorter = min(len(norm_response), len(norm_option))
+                longer = max(len(norm_response), len(norm_option))
+                if shorter / longer >= 0.6:
+                    return valid_option
     
-    # Simple similarity score based on word overlap
-    def similarity_score(text1, text2):
-        """Calculate similarity between two texts based on word overlap"""
-        words1 = set(text1.lower().split())
-        words2 = set(text2.lower().split())
-        
-        if not words1 or not words2:
-            return 0
-        
-        # Calculate Jaccard similarity
-        intersection = words1.intersection(words2)
-        union = words1.union(words2)
-        
-        return len(intersection) / len(union) if union else 0
-    
-    # Filter function
-    def is_valid(value):
-        if pd.isna(value) or value == '':
-            return False
-        
-        value_str = str(value).strip()
-        
-        # Filter obviously invalid
-        if len(value_str) > 200 or value_str.count('.') >= 3:
-            return False
-        
-        # For multi-select, check if ALL parts are valid
-        if ',' in value_str or ';' in value_str:
-            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
-            for part in parts:
-                if not part:
-                    continue
-                normalized_part = normalize_for_matching(part)
-                
-                # Check similarity OR key word match
-                is_similar = False
-                for valid_opt in normalized_valid:
-                    sim = similarity_score(normalized_part, valid_opt)
-                    key_match = has_key_words(normalized_part, valid_opt)
-                    
-                    # Accept if either 30% similarity OR key words match
-                    if sim >= 0.3 or key_match:
-                        is_similar = True
-                        break
-                
-                if not is_similar:
-                    return False
-            return True
-        else:
-            # Single select - check similarity to valid options
-            normalized_value = normalize_for_matching(value_str)
-            
-            # Check similarity to each valid option
-            for valid_opt in normalized_valid:
-                sim = similarity_score(normalized_value, valid_opt)
-                key_match = has_key_words(normalized_value, valid_opt)
-                
-                # Accept if either 30% similarity OR key words match
-                if sim >= 0.3 or key_match:
-                    return True
-            
-            return False
-    
-    # Apply filter
-    filtered = series[series.apply(is_valid)]
-    
-    return filtered
-    
-    # Normalize function for comparison
-    def normalize_for_matching(text):
-        """Normalize text for fuzzy matching"""
-        text = str(text).strip().lower()
-        # Replace apostrophes and quotes
-        for char in ["'", "'", "'", "`", "´", "'"]:
-            text = text.replace(char, "'")
-        for char in [""", """, "«", "»", "„", "‟"]:
-            text = text.replace(char, '"')
-        # Remove invisible chars
-        for char in ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']:
-            text = text.replace(char, '')
-        # Normalize whitespace
-        text = ' '.join(text.split())
-        return text
-    
-    # Create normalized valid options
-    normalized_valid = [normalize_for_matching(opt) for opt in valid_options]
-    
-    # Simple similarity score based on word overlap
-    def similarity_score(text1, text2):
-        """Calculate similarity between two texts based on word overlap"""
-        words1 = set(text1.lower().split())
-        words2 = set(text2.lower().split())
-        
-        if not words1 or not words2:
-            return 0
-        
-        # Calculate Jaccard similarity
-        intersection = words1.intersection(words2)
-        union = words1.union(words2)
-        
-        return len(intersection) / len(union) if union else 0
-    
-    # Filter function
-    def is_valid(value):
-        if pd.isna(value) or value == '':
-            return False
-        
-        value_str = str(value).strip()
-        
-        # Filter obviously invalid
-        if len(value_str) > 200 or value_str.count('.') >= 3:
-            return False
-        
-        # For multi-select, check if ALL parts are valid
-        if ',' in value_str or ';' in value_str:
-            parts = [p.strip() for p in value_str.replace(';', ',').split(',')]
-            for part in parts:
-                if not part:
-                    continue
-                normalized_part = normalize_for_matching(part)
-                
-                # Check if this part is similar to any valid option
-                max_similarity = max([similarity_score(normalized_part, valid_opt) 
-                                     for valid_opt in normalized_valid])
-                
-                # Require at least 50% word overlap
-                if max_similarity < 0.5:
-                    return False
-            return True
-        else:
-            # Single select - check similarity to valid options
-            normalized_value = normalize_for_matching(value_str)
-            
-            # Check similarity to each valid option
-            max_similarity = max([similarity_score(normalized_value, valid_opt) 
-                                 for valid_opt in normalized_valid])
-            
-            # Require at least 50% word overlap
-            return max_similarity >= 0.5
-    
-    # Apply filter
-    filtered = series[series.apply(is_valid)]
-    
-    return filtered
+    return None
 
 def normalize_for_display(series):
     """Normalize responses to group similar variations together"""
@@ -909,24 +771,7 @@ def normalize_for_display(series):
         if pd.isna(text) or text == '':
             return ''
         
-        text = str(text).strip()
-        
-        # Replace all apostrophe/quote variations with standard ones
-        apostrophe_chars = ["'", "'", "'", "`", "´", "'"]
-        for char in apostrophe_chars:
-            text = text.replace(char, "'")
-        
-        quote_chars = [""", """, "«", "»", "„", "‟"]
-        for char in quote_chars:
-            text = text.replace(char, '"')
-        
-        # Remove zero-width and invisible characters
-        invisible_chars = ['\u200b', '\u200c', '\u200d', '\ufeff', '\u00a0']
-        for char in invisible_chars:
-            text = text.replace(char, '')
-        
-        # Normalize whitespace
-        text = ' '.join(text.split())
+        text = robust_normalize(text)
         
         # Standardize capitalization - capitalize first letter of each sentence
         sentences = text.split('. ')
@@ -936,6 +781,27 @@ def normalize_for_display(series):
         return text
     
     return series.apply(normalize_text)
+
+def normalize_single_select_to_whitelist(series, question_text):
+    """For single-select questions: match each response to valid whitelist options.
+    Returns series with canonical option text, filtering out non-matching responses."""
+    valid_responses_dict = get_valid_responses()
+    valid_options = valid_responses_dict.get(question_text, [])
+    
+    if not valid_options:
+        # No whitelist for this question, fall back to basic normalization
+        return normalize_for_display(series)
+    
+    def map_response(value):
+        if pd.isna(value) or str(value).strip() == '':
+            return None
+        
+        matched = match_to_valid_option(str(value).strip(), valid_options)
+        return matched  # Returns canonical text or None
+    
+    mapped = series.apply(map_response)
+    # Filter out None (unmatched responses)
+    return mapped.dropna()
 
 def normalize_yes_no_responses(series, question_text):
     """Normalize True/False responses to Yes/No for display"""
@@ -1052,7 +918,7 @@ if st.session_state.combined_data is not None:
     demo_cols = get_demographic_columns(df)
     
     # Tabs for different views
-    tab0, tab1, tab2, tab3, tab4 = st.tabs(["📊 Proficiency Overview", "🔍 Question Explorer", "📈 Demographics", "📋 Raw Data", "📥 Export"])
+    tab0, tab1, tab2, tab5, tab3, tab4 = st.tabs(["📊 Proficiency Overview", "🔍 Question Explorer", "📈 Demographics", "🏢 Client Deep Dive", "📋 Raw Data", "📥 Export"])
     
     with tab0:
         st.header("Proficiency Overview")
@@ -1061,28 +927,38 @@ if st.session_state.combined_data is not None:
         # Filters
         col1, col2 = st.columns(2)
         
+        if 'Industry' in df.columns:
+            client_options, industry_options, valid_clients, valid_industries = get_cascading_options(
+                df, 'overview_client_filter', 'overview_industry_filter'
+            )
+        else:
+            client_options = ['All Clients'] + sorted(df['Client'].unique().tolist())
+            valid_clients = st.session_state.get('overview_client_filter', ['All Clients'])
+            industry_options = None
+            valid_industries = ['All']
+        
         with col1:
             # Client filter
             overview_clients = st.multiselect(
                 "Filter by Client",
-                options=['All Clients'] + sorted(df['Client'].unique().tolist()),
-                default=['All Clients'],
-                key='overview_client_filter'
+                options=client_options,
+                default=valid_clients,
+                key='overview_client_filter',
+                on_change=handle_filter_change,
+                args=('overview_client_filter', 'All Clients')
             )
         
         with col2:
             # Industry filter
+            overview_industries = ['All']  # default if no Industry column
             if 'Industry' in df.columns:
-                unique_industries = df['Industry'].dropna().unique()
-                industry_options_overview = ['All'] + sorted([str(v) for v in unique_industries if str(v) != 'Unknown'])
-                if 'Unknown' in unique_industries:
-                    industry_options_overview.append('Unknown')
-                
                 overview_industries = st.multiselect(
                     "Filter by Industry",
-                    options=industry_options_overview,
-                    default=['All'],
-                    key='overview_industry_filter'
+                    options=industry_options,
+                    default=valid_industries,
+                    key='overview_industry_filter',
+                    on_change=handle_filter_change,
+                    args=('overview_industry_filter', 'All')
                 )
         
         # Apply filters
@@ -1091,7 +967,7 @@ if st.session_state.combined_data is not None:
         if 'All Clients' not in overview_clients and overview_clients:
             overview_df = overview_df[overview_df['Client'].isin(overview_clients)]
         
-        if 'All' not in overview_industries and overview_industries:
+        if 'Industry' in df.columns and 'All' not in overview_industries and overview_industries:
             overview_df = overview_df[overview_df['Industry'].isin(overview_industries)]
         
         # Show summary
@@ -1118,7 +994,7 @@ if st.session_state.combined_data is not None:
                 with metric_cols[idx]:
                     st.metric(
                         label=level,
-                        value=f"{percentage:.1f}%",
+                        value=f"{percentage:.0f}%",
                         delta=f"{count} responses"
                     )
             
@@ -1149,10 +1025,10 @@ if st.session_state.combined_data is not None:
                         text='Count',
                         color='Proficiency Level',
                         color_discrete_map={
-                            'AI Expert': '#1f77b4',
-                            'AI Practitioner': '#2ca02c',
-                            'AI Experimenter': '#ff7f0e',
-                            'AI Novice': '#d62728'
+                            'AI Expert': '#3900FF',
+                            'AI Practitioner': '#00FFB7',
+                            'AI Experimenter': '#F2EB00',
+                            'AI Novice': '#9901EB'
                         }
                     )
                     fig_count.update_traces(textposition='outside')
@@ -1160,7 +1036,9 @@ if st.session_state.combined_data is not None:
                         showlegend=False,
                         xaxis_title="",
                         yaxis_title="Number of Responses",
-                        height=400
+                        height=400,
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)'
                     )
                     st.plotly_chart(fig_count, use_container_width=True)
                 
@@ -1172,19 +1050,23 @@ if st.session_state.combined_data is not None:
                         names='Proficiency Level',
                         color='Proficiency Level',
                         color_discrete_map={
-                            'AI Expert': '#1f77b4',
-                            'AI Practitioner': '#2ca02c',
-                            'AI Experimenter': '#ff7f0e',
-                            'AI Novice': '#d62728'
+                            'AI Expert': '#3900FF',
+                            'AI Practitioner': '#00FFB7',
+                            'AI Experimenter': '#F2EB00',
+                            'AI Novice': '#9901EB'
                         }
                     )
                     fig_pie.update_traces(
                         textposition='inside',
                         textinfo='percent+label',
-                        hovertemplate='<b>%{label}</b><br>%{value:.1f}%<br>%{customdata[0]} responses<extra></extra>',
+                        hovertemplate='<b>%{label}</b><br>%{value:.0f}%<br>%{customdata[0]} responses<extra></extra>',
                         customdata=viz_df[['Count']].values
                     )
-                    fig_pie.update_layout(height=400)
+                    fig_pie.update_layout(
+                        height=400,
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)'
+                    )
                     st.plotly_chart(fig_pie, use_container_width=True)
                 
                 # Detailed table
@@ -1194,7 +1076,7 @@ if st.session_state.combined_data is not None:
                 detail_df = pd.DataFrame({
                     'Proficiency Level': viz_df['Proficiency Level'],
                     'Count': viz_df['Count'],
-                    'Percentage': viz_df['Percentage'].apply(lambda x: f"{x:.1f}%")
+                    'Percentage': viz_df['Percentage'].apply(lambda x: f"{x:.0f}%")
                 })
                 
                 st.dataframe(detail_df, hide_index=True, use_container_width=True)
@@ -1230,12 +1112,22 @@ if st.session_state.combined_data is not None:
             )
         
         with col2:
-            # Client filter
-            clients = ['All Clients'] + sorted(df['Client'].unique().tolist())
+            # Client filter - compute cascading options first
+            if 'Industry' in df.columns:
+                explorer_client_options, explorer_industry_options, explorer_valid_clients, explorer_valid_industries = get_cascading_options(
+                    df, 'explorer_client_filter', 'filter_industry'
+                )
+            else:
+                explorer_client_options = ['All Clients'] + sorted(df['Client'].unique().tolist())
+                explorer_valid_clients = st.session_state.get('explorer_client_filter', ['All Clients'])
+            
             selected_clients = st.multiselect(
                 "Filter by Client",
-                options=clients,
-                default=['All Clients']
+                options=explorer_client_options,
+                default=explorer_valid_clients,
+                key='explorer_client_filter',
+                on_change=handle_filter_change,
+                args=('explorer_client_filter', 'All Clients')
             )
         
         # Filters section
@@ -1248,16 +1140,13 @@ if st.session_state.combined_data is not None:
         with filter_col1:
             # Industry filter
             if 'Industry' in df.columns:
-                unique_industries = df['Industry'].dropna().unique()
-                industry_options = ['All'] + sorted([str(v) for v in unique_industries if str(v) != 'Unknown'])
-                if 'Unknown' in unique_industries:
-                    industry_options.append('Unknown')
-                
                 selected_industries = st.multiselect(
                     "Industry",
-                    options=industry_options,
-                    default=['All'],
-                    key="filter_industry"
+                    options=explorer_industry_options,
+                    default=explorer_valid_industries,
+                    key="filter_industry",
+                    on_change=handle_filter_change,
+                    args=('filter_industry', 'All')
                 )
                 if 'All' not in selected_industries:
                     active_filters['Industry'] = selected_industries
@@ -1279,7 +1168,9 @@ if st.session_state.combined_data is not None:
                     "AI Proficiency Level",
                     options=proficiency_options,
                     default=['All'],
-                    key="filter_proficiency"
+                    key="filter_proficiency",
+                    on_change=handle_filter_change,
+                    args=('filter_proficiency', 'All')
                 )
                 if 'All' not in selected_proficiencies:
                     active_filters['Proficiency'] = selected_proficiencies
@@ -1305,16 +1196,31 @@ if st.session_state.combined_data is not None:
             
             # Apply response filtering
             question_data = filtered_df[selected_question].dropna()
+            original_count = len(question_data)
             question_data_filtered = filter_valid_responses(question_data, selected_question)
             
-            # Show how many responses were filtered out
-            filtered_count = len(question_data) - len(question_data_filtered)
+            question_data = question_data_filtered
+            
+            # Determine question type BEFORE normalization (trust the whitelist, not the data)
+            question_type_check = get_question_type(selected_question, selected_question)
+            
+            # Only normalize for single-select (multi-select is normalized during processing)
+            if question_type_check != 'multi-select':
+                # Use whitelist matching: maps responses to canonical form and drops non-matches
+                question_data = normalize_single_select_to_whitelist(question_data, selected_question)
+            
+            # Normalize True/False to Yes/No for display (for Yes/No questions only)
+            question_data = normalize_yes_no_responses(question_data, selected_question)
+            
+            # Show how many responses were filtered out (from both filter steps)
+            filtered_count = original_count - len(question_data)
             if filtered_count > 0:
                 st.warning(f"⚠️ Filtered out {filtered_count} invalid/contaminated responses")
                 
                 # DEBUG: Show what was filtered out
                 with st.expander("🔍 Debug: View filtered responses", expanded=False):
-                    filtered_out = question_data[~question_data.index.isin(question_data_filtered.index)]
+                    filtered_out = filtered_df[selected_question].dropna()
+                    filtered_out = filtered_out[~filtered_out.index.isin(question_data.index)]
                     unique_filtered = filtered_out.unique()
                     
                     st.write("**Responses that were filtered out:**")
@@ -1325,18 +1231,6 @@ if st.session_state.combined_data is not None:
                     valid_options = get_valid_responses().get(selected_question, [])
                     for opt in valid_options:
                         st.code(f"'{opt}'")
-            
-            question_data = question_data_filtered
-            
-            # Determine question type BEFORE normalization (trust the whitelist, not the data)
-            question_type_check = get_question_type(selected_question, selected_question)
-            
-            # Only normalize for single-select (multi-select is normalized during processing)
-            if question_type_check != 'multi-select':
-                question_data = normalize_for_display(question_data)
-            
-            # Normalize True/False to Yes/No for display
-            question_data = normalize_yes_no_responses(question_data, selected_question)
             
             # Display based on type
             if question_type_check == 'multi-select':
@@ -1359,7 +1253,7 @@ if st.session_state.combined_data is not None:
                 result_df = pd.DataFrame({
                     'Option': option_counts.index,
                     'Count': option_counts.values,
-                    'Percentage': (option_counts.values / len(question_data) * 100).round(1)
+                    'Percentage': [f"{x:.0f}%" for x in (option_counts.values / len(question_data) * 100)]
                 })
                 st.dataframe(result_df, hide_index=True, use_container_width=True)
             
@@ -1405,7 +1299,7 @@ if st.session_state.combined_data is not None:
                 result_df = pd.DataFrame({
                     'Option': value_counts.index,
                     'Count': value_counts.values,
-                    'Percentage': (value_counts.values / len(question_data) * 100).round(1)
+                    'Percentage': [f"{x:.0f}%" for x in (value_counts.values / len(question_data) * 100)]
                 })
                 st.dataframe(result_df, hide_index=True, use_container_width=True)
     
@@ -1418,7 +1312,9 @@ if st.session_state.combined_data is not None:
             "Filter by Client",
             options=['All Clients'] + sorted(df['Client'].unique().tolist()),
             default=['All Clients'],
-            key='demo_client_filter'
+            key='demo_client_filter',
+            on_change=handle_filter_change,
+            args=('demo_client_filter', 'All Clients')
         )
         
         demo_filtered_df = df.copy()
@@ -1448,7 +1344,7 @@ if st.session_state.combined_data is not None:
                 industry_df = pd.DataFrame({
                     'Industry': industry_counts.index,
                     'Count': industry_counts.values,
-                    'Percentage': (industry_counts.values / len(demo_filtered_df) * 100).round(1)
+                    'Percentage': [f"{x:.0f}%" for x in (industry_counts.values / len(demo_filtered_df) * 100)]
                 })
                 st.dataframe(industry_df, hide_index=True, use_container_width=True)
         
@@ -1470,9 +1366,332 @@ if st.session_state.combined_data is not None:
                 proficiency_df = pd.DataFrame({
                     'Proficiency': proficiency_counts.index,
                     'Count': proficiency_counts.values,
-                    'Percentage': (proficiency_counts.values / len(demo_filtered_df) * 100).round(1)
+                    'Percentage': [f"{x:.0f}%" for x in (proficiency_counts.values / len(demo_filtered_df) * 100)]
                 })
                 st.dataframe(proficiency_df, hide_index=True, use_container_width=True)
+    
+    with tab5:
+        st.header("Client Deep Dive")
+        st.markdown("Compare a specific client's AI proficiency and responses against benchmarks")
+        
+        # Client selector
+        all_clients = sorted(df['Client'].unique().tolist())
+        selected_client = st.selectbox(
+            "Select Client",
+            options=all_clients,
+            key='deep_dive_client'
+        )
+        
+        if selected_client:
+            client_df = df[df['Client'] == selected_client]
+            client_industry = client_df['Industry'].iloc[0] if 'Industry' in client_df.columns else None
+            industry_df = df[df['Industry'] == client_industry] if client_industry and client_industry != 'Unknown' else None
+            
+            st.info(f"📊 {selected_client}: {len(client_df)} responses | Industry: {client_industry or 'Unknown'}" +
+                    (f" ({len(industry_df)} total in industry)" if industry_df is not None else ""))
+            
+            # === PROFICIENCY COMPARISON CHART ===
+            st.divider()
+            st.subheader("Proficiency Benchmark Comparison")
+            
+            proficiency_order = ['AI Expert', 'AI Practitioner', 'AI Experimenter', 'AI Novice']
+            proficiency_colors = {
+                'AI Expert': '#3900FF',
+                'AI Practitioner': '#00FFB7',
+                'AI Experimenter': '#F2EB00',
+                'AI Novice': '#9901EB'
+            }
+            
+            if 'Proficiency' in df.columns:
+                # Calculate percentages for each group
+                def calc_proficiency_pcts(subset_df, label):
+                    total = len(subset_df)
+                    if total == 0:
+                        return []
+                    counts = subset_df['Proficiency'].value_counts()
+                    return [{'Proficiency Level': level, 
+                             'Percentage': (counts.get(level, 0) / total * 100),
+                             'Count': counts.get(level, 0),
+                             'Group': label} for level in proficiency_order]
+                
+                comparison_data = []
+                comparison_data.extend(calc_proficiency_pcts(client_df, selected_client))
+                if industry_df is not None:
+                    comparison_data.extend(calc_proficiency_pcts(industry_df, f"Industry: {client_industry}"))
+                comparison_data.extend(calc_proficiency_pcts(df, "All Clients"))
+                
+                comp_df = pd.DataFrame(comparison_data)
+                
+                if len(comp_df) > 0:
+                    fig_comp = px.bar(
+                        comp_df,
+                        x='Proficiency Level',
+                        y='Percentage',
+                        color='Group',
+                        barmode='group',
+                        text=comp_df['Percentage'].apply(lambda x: f"{x:.0f}%"),
+                        color_discrete_sequence=['#3900FF', '#9901EB', '#00FFB7'],
+                        category_orders={'Proficiency Level': proficiency_order}
+                    )
+                    fig_comp.update_traces(textposition='outside')
+                    fig_comp.update_layout(
+                        height=450,
+                        xaxis_title="",
+                        yaxis_title="Percentage of Respondents",
+                        legend_title="",
+                        template='plotly_white',
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        yaxis=dict(range=[0, max(comp_df['Percentage']) * 1.15])
+                    )
+                    st.plotly_chart(fig_comp, use_container_width=True)
+                    
+                    # Comparison table
+                    with st.expander("View comparison data"):
+                        # Build groups for table
+                        groups = [selected_client]
+                        if industry_df is not None:
+                            groups.append(f"Industry: {client_industry}")
+                        groups.append("All Clients")
+                        
+                        table_data = {}
+                        for level in proficiency_order:
+                            row = {}
+                            for group in groups:
+                                match = comp_df[(comp_df['Proficiency Level'] == level) & (comp_df['Group'] == group)]
+                                if len(match) > 0:
+                                    row[group] = f"{match['Percentage'].iloc[0]:.0f}% ({match['Count'].iloc[0]})"
+                                else:
+                                    row[group] = "0% (0)"
+                            table_data[level] = row
+                        
+                        table_df = pd.DataFrame(table_data).T
+                        table_df.index.name = 'Proficiency Level'
+                        st.dataframe(table_df, use_container_width=True)
+            
+            # === QUESTION ANALYSIS ===
+            st.divider()
+            st.subheader("Question Analysis")
+            
+            dd_category = st.radio(
+                "Question Category",
+                options=["📊 Scored Questions", "🏢 Organizational Readiness"],
+                horizontal=True,
+                key='dd_question_category'
+            )
+            
+            dd_question_type = 'scored' if '📊' in dd_category else 'org'
+            dd_question_cols = get_question_columns(df, question_type=dd_question_type)
+            
+            dd_selected_question = st.selectbox(
+                "Select Question",
+                options=dd_question_cols,
+                key='dd_question_select'
+            )
+            
+            if dd_selected_question and len(client_df) > 0:
+                # Process question data for this client
+                dd_question_data = client_df[dd_selected_question].dropna()
+                dd_original_count = len(dd_question_data)
+                dd_question_data = filter_valid_responses(dd_question_data, dd_selected_question)
+                
+                dd_type = get_question_type(dd_selected_question, dd_selected_question)
+                
+                if dd_type != 'multi-select':
+                    dd_question_data = normalize_single_select_to_whitelist(dd_question_data, dd_selected_question)
+                dd_question_data = normalize_yes_no_responses(dd_question_data, dd_selected_question)
+                
+                dd_filtered_count = dd_original_count - len(dd_question_data)
+                if dd_filtered_count > 0:
+                    st.caption(f"⚠️ Filtered out {dd_filtered_count} invalid responses")
+                
+                if len(dd_question_data) == 0:
+                    st.warning("No valid responses for this question from this client.")
+                elif dd_type == 'free-response':
+                    st.caption("Free response question — showing sample responses")
+                    for idx, response in enumerate(dd_question_data.head(10), 1):
+                        with st.expander(f"Response {idx}"):
+                            st.write(response)
+                else:
+                    # --- CHART 1: Overall response breakdown ---
+                    st.markdown("#### Response Breakdown")
+                    
+                    if dd_type == 'multi-select':
+                        dd_option_counts = process_multiselect_column(dd_question_data, get_counts=True)
+                        dd_total_respondents = len(dd_question_data)
+                    else:
+                        dd_option_counts = dd_question_data.value_counts()
+                        dd_total_respondents = len(dd_question_data)
+                    
+                    if len(dd_option_counts) > 0:
+                        # Build comparison data: client vs industry vs all clients
+                        def get_response_pcts(subset_df, question, q_type, label):
+                            """Get response percentages for a subset of data."""
+                            q_data = subset_df[question].dropna()
+                            q_data = filter_valid_responses(q_data, question)
+                            if q_type != 'multi-select':
+                                q_data = normalize_single_select_to_whitelist(q_data, question)
+                            q_data = normalize_yes_no_responses(q_data, question)
+                            total = len(q_data)
+                            if total == 0:
+                                return [], 0
+                            if q_type == 'multi-select':
+                                counts = process_multiselect_column(q_data, get_counts=True)
+                            else:
+                                counts = q_data.value_counts()
+                            results = []
+                            for option in dd_option_counts.index:
+                                c = counts.get(option, 0)
+                                results.append({
+                                    'Response': option,
+                                    'Percentage': (c / total * 100),
+                                    'Count': c,
+                                    'Group': label
+                                })
+                            return results, total
+                        
+                        comp_response_data = []
+                        client_results, client_n = get_response_pcts(client_df, dd_selected_question, dd_type, selected_client)
+                        comp_response_data.extend(client_results)
+                        
+                        if industry_df is not None:
+                            ind_results, ind_n = get_response_pcts(industry_df, dd_selected_question, dd_type, f"Industry: {client_industry}")
+                            comp_response_data.extend(ind_results)
+                        
+                        all_results, all_n = get_response_pcts(df, dd_selected_question, dd_type, "All Clients")
+                        comp_response_data.extend(all_results)
+                        
+                        comp_resp_df = pd.DataFrame(comp_response_data)
+                        
+                        fig_overall = px.bar(
+                            comp_resp_df,
+                            x='Response',
+                            y='Percentage',
+                            color='Group',
+                            barmode='group',
+                            text=comp_resp_df['Percentage'].apply(lambda x: f"{x:.0f}%" if x >= 3 else ""),
+                            color_discrete_sequence=['#3900FF', '#9901EB', '#00FFB7']
+                        )
+                        fig_overall.update_traces(textposition='outside')
+                        fig_overall.update_layout(
+                            xaxis_tickangle=-45,
+                            height=450,
+                            xaxis_title="",
+                            yaxis_title="% of Respondents",
+                            legend_title="",
+                            template='plotly_white',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            yaxis=dict(range=[0, max(comp_resp_df['Percentage']) * 1.15]) if len(comp_resp_df) > 0 else {}
+                        )
+                        st.plotly_chart(fig_overall, use_container_width=True)
+                        
+                        # Comparison table
+                        groups = [selected_client]
+                        if industry_df is not None:
+                            groups.append(f"Industry: {client_industry}")
+                        groups.append("All Clients")
+                        
+                        table_rows = []
+                        for option in dd_option_counts.index:
+                            row = {'Response': option}
+                            for group in groups:
+                                match = comp_resp_df[(comp_resp_df['Response'] == option) & (comp_resp_df['Group'] == group)]
+                                if len(match) > 0:
+                                    row[group] = f"{match['Percentage'].iloc[0]:.0f}% ({match['Count'].iloc[0]})"
+                                else:
+                                    row[group] = "-"
+                            table_rows.append(row)
+                        
+                        overall_table = pd.DataFrame(table_rows)
+                        st.dataframe(overall_table, hide_index=True, use_container_width=True)
+                    
+                    # --- CHART 2: Breakdown by proficiency level ---
+                    st.markdown("#### Responses by Proficiency Level")
+                    
+                    if 'Proficiency' in client_df.columns:
+                        # Get all valid response options (in display order from chart 1)
+                        response_options = list(dd_option_counts.index) if len(dd_option_counts) > 0 else []
+                        
+                        # Build data: for each proficiency level, what % selected each response
+                        prof_breakdown_data = []
+                        
+                        for level in proficiency_order:
+                            level_df = client_df[client_df['Proficiency'] == level]
+                            if len(level_df) == 0:
+                                continue
+                            
+                            level_q = level_df[dd_selected_question].dropna()
+                            level_q = filter_valid_responses(level_q, dd_selected_question)
+                            
+                            if dd_type != 'multi-select':
+                                level_q = normalize_single_select_to_whitelist(level_q, dd_selected_question)
+                            level_q = normalize_yes_no_responses(level_q, dd_selected_question)
+                            
+                            level_total = len(level_q)
+                            if level_total == 0:
+                                continue
+                            
+                            if dd_type == 'multi-select':
+                                level_counts = process_multiselect_column(level_q, get_counts=True)
+                            else:
+                                level_counts = level_q.value_counts()
+                            
+                            for option in response_options:
+                                count = level_counts.get(option, 0)
+                                pct = (count / level_total * 100) if level_total > 0 else 0
+                                prof_breakdown_data.append({
+                                    'Response': option,
+                                    'Proficiency Level': level,
+                                    'Percentage': pct,
+                                    'Count': count,
+                                    'Level Total': level_total
+                                })
+                        
+                        if prof_breakdown_data:
+                            prof_df = pd.DataFrame(prof_breakdown_data)
+                            
+                            fig_prof = px.bar(
+                                prof_df,
+                                x='Response',
+                                y='Percentage',
+                                color='Proficiency Level',
+                                barmode='group',
+                                text=prof_df['Percentage'].apply(lambda x: f"{x:.0f}%" if x >= 5 else ""),
+                                color_discrete_map=proficiency_colors,
+                                category_orders={'Proficiency Level': proficiency_order}
+                            )
+                            fig_prof.update_traces(textposition='outside')
+                            fig_prof.update_layout(
+                                height=500,
+                                xaxis_title="",
+                                yaxis_title="% of Proficiency Level",
+                                legend_title="",
+                                template='plotly_white',
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                xaxis_tickangle=-45
+                            )
+                            st.plotly_chart(fig_prof, use_container_width=True)
+                            
+                            # Pivot table for readability
+                            pivot_data = []
+                            for option in response_options:
+                                row = {'Response': option}
+                                for level in proficiency_order:
+                                    match = prof_df[(prof_df['Response'] == option) & (prof_df['Proficiency Level'] == level)]
+                                    if len(match) > 0:
+                                        row[level] = f"{match['Percentage'].iloc[0]:.0f}% ({match['Count'].iloc[0]})"
+                                    else:
+                                        row[level] = "-"
+                                pivot_data.append(row)
+                            
+                            pivot_table = pd.DataFrame(pivot_data)
+                            st.dataframe(pivot_table, hide_index=True, use_container_width=True)
+                        else:
+                            st.warning("No proficiency data available for this question.")
+                    else:
+                        st.warning("No proficiency data available.")
     
     with tab3:
         st.header("Raw Data View")
